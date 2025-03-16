@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Room {
+  id        String         @id @default(auto()) @map("_id") @db.ObjectId
+  roomId    String         @unique
+  createdAt DateTime       @default(now())
+  expiresAt DateTime
+  active    Boolean        @default(true)
+  createdBy String? // Optional user identifier
+  metadata  Json? // Optional metadata for future extensions
+  presence  RoomPresence[] // Relation to RoomPresence
+
+  @@index([expiresAt]) // Index for efficient querying of expired rooms
+}
+
+model RoomPresence {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  room      Room     @relation(fields: [roomId], references: [roomId])
+  roomId    String
+  userId    String
+  peerId    String
+  timestamp DateTime @default(now())
+
+  @@unique([roomId, userId, peerId])
+  @@index([roomId])
+  @@index([timestamp])
+}
