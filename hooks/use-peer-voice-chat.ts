@@ -9,6 +9,7 @@ type PeerConnection = {
   call: any;
   audio: HTMLAudioElement | null;
   type: "audio";
+  connectionQuality: "good" | "fair" | "poor";
 };
 
 type RoomParticipant = {
@@ -23,10 +24,11 @@ export function usePeerVoiceChat(roomId: string) {
   const [error, setError] = useState<string | null>(null);
   const [participants, setParticipants] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [networkQuality, setNetworkQuality] = useState<"good" | "fair" | "poor">("good");
 
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const userIdRef = useRef<string>(localStorage.getItem(`voicechat-userid-${roomId}`) ?? uuidv4().substring(0, 8));
+  const userIdRef = useRef<string>("");
   const peersRef = useRef<Map<string, PeerConnection>>(new Map());
   const roomPrefixRef = useRef<string>(`voicechat-${roomId}-`);
   const audioElementsCallbackRef = useRef<
@@ -35,9 +37,23 @@ export function usePeerVoiceChat(roomId: string) {
   const presenceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const participantPollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Initialize userId on client side
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const storedUserId = localStorage.getItem(`voicechat-userid-${roomId}`);
+      if (!storedUserId) {
+        const newUserId = uuidv4().substring(0, 8);
+        localStorage.setItem(`voicechat-userid-${roomId}`, newUserId);
+        userIdRef.current = newUserId;
+      } else {
+        userIdRef.current = storedUserId;
+      }
+    }
+  }, [roomId]);
+
   // Store user ID in localStorage when it's first created
   useEffect(() => {
-    if (!localStorage.getItem(`voicechat-userid-${roomId}`)) {
+    if (typeof window !== 'undefined' && userIdRef.current) {
       localStorage.setItem(`voicechat-userid-${roomId}`, userIdRef.current);
     }
   }, [roomId]);
@@ -95,6 +111,7 @@ export function usePeerVoiceChat(roomId: string) {
         call,
         audio,
         type: "audio",
+        connectionQuality: "good",
       });
 
       // Add to participants
@@ -271,6 +288,94 @@ export function usePeerVoiceChat(roomId: string) {
     }
   }, [roomId]);
 
+  // Monitor network quality
+  const monitorNetworkQuality = useCallback(() => {
+    if (!peerRef.current) return;
+
+    const checkConnectionQuality = () => {
+      const connections = peerRef.current?.connections;
+      if (!connections) return;
+
+      let totalQuality = 0;
+      let connectionCount = 0;
+
+      Object.values(connections).forEach((conns: any) => {
+        conns.forEach((conn: any) => {
+          if (conn.open) {
+            const stats = conn.getStats();
+            stats.forEach((stat: any) => {
+              if (stat.type === 'candidate-pair' && stat.state === 'succeeded') {
+                // Calculate quality based on RTT and packet loss
+                const rtt = stat.currentRoundTripTime || 0;
+                const packetLoss = stat.packetsLost || 0;
+                const totalPackets = stat.packetsSent || 1;
+                const lossRate = packetLoss / totalPackets;
+
+                let quality = 1;
+                if (rtt > 300) quality -= 0.3; // High latency
+                if (lossRate > 0.1) quality -= 0.3; // High packet loss
+                if (rtt > 500) quality -= 0.4; // Very high latency
+                if (lossRate > 0.2) quality -= 0.4; // Very high packet loss
+
+                totalQuality += Math.max(0, quality);
+                connectionCount++;
+              }
+            });
+          }
+        });
+      });
+
+      if (connectionCount > 0) {
+        const averageQuality = totalQuality / connectionCount;
+        const newQuality = averageQuality > 0.7 ? "good" : averageQuality > 0.4 ? "fair" : "poor";
+        setNetworkQuality(newQuality);
+        
+        // Adjust audio quality based on network conditions
+        if (localStreamRef.current) {
+          const audioTrack = localStreamRef.current.getAudioTracks()[0];
+          if (audioTrack) {
+            const constraints = audioTrack.getConstraints();
+            if (newQuality === "poor") {
+              // Reduce quality for poor connections
+              audioTrack.applyConstraints({
+                ...constraints,
+                sampleRate: 22050,
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: false
+              });
+            } else if (newQuality === "fair") {
+              // Medium quality for fair connections
+              audioTrack.applyConstraints({
+                ...constraints,
+                sampleRate: 32000,
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              });
+            } else {
+              // High quality for good connections
+              audioTrack.applyConstraints({
+                ...constraints,
+                sampleRate: 48000,
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              });
+            }
+          }
+        }
+      }
+    };
+
+    // Check quality every 5 seconds
+    const qualityInterval = setInterval(checkConnectionQuality, 5000);
+    return () => clearInterval(qualityInterval);
+  }, []);
+
   // Initialize PeerJS and WebRTC connections
   useEffect(() => {
     let mounted = true;
@@ -279,13 +384,13 @@ export function usePeerVoiceChat(roomId: string) {
       try {
         setIsLoading(true);
 
-        // Get local audio stream
+        // Get local audio stream with initial low quality settings for better initial connection
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
-            sampleRate: 48000,
+            sampleRate: 22050, // Start with lower quality
             channelCount: 1,
           },
           video: false,
@@ -336,6 +441,9 @@ export function usePeerVoiceChat(roomId: string) {
 
           // Start polling for participants
           startParticipantPolling();
+
+          // Start network quality monitoring
+          const cleanupQualityMonitor = monitorNetworkQuality();
         });
 
         // Handle incoming calls
@@ -387,6 +495,7 @@ export function usePeerVoiceChat(roomId: string) {
               call,
               audio,
               type: "audio",
+              connectionQuality: "good",
             });
 
             // Add to participants
@@ -508,8 +617,11 @@ export function usePeerVoiceChat(roomId: string) {
       });
 
       peersRef.current.clear();
+
+      // Stop network quality monitoring
+      const cleanupQualityMonitor = monitorNetworkQuality();
     };
-  }, [roomId, broadcastPresence, startParticipantPolling]);
+  }, [roomId, broadcastPresence, startParticipantPolling, monitorNetworkQuality]);
 
   // Handle mute/unmute
   useEffect(() => {
@@ -541,5 +653,6 @@ export function usePeerVoiceChat(roomId: string) {
     disconnect,
     isLoading,
     registerAudioElementsCallback,
+    networkQuality,
   };
 }
