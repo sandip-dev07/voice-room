@@ -144,9 +144,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Clean up stale participants (older than 2 minutes)
+    // Clean up stale participants (older than 2 minutes) and remove duplicates
     const now = Date.now();
-    participants = participants.filter((p) => now - p.timestamp < 120000);
+    participants = participants
+      .filter((p) => now - p.timestamp < 120000)
+      .filter((p, index, self) => 
+        index === self.findIndex((t) => t.userId === p.userId)
+      );
 
     // Update cache
     presenceCache.set(roomId, participants);
@@ -174,7 +178,27 @@ export async function GET(request: NextRequest) {
 // Register presence in a room
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Check if request has a body
+    const contentType = request.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      return NextResponse.json(
+        { success: false, error: "Content-Type must be application/json" },
+        { status: 400 }
+      );
+    }
+
+    // Clone the request to read the body twice if needed
+    const clonedRequest = request.clone();
+    const body = await clonedRequest.json();
+
+    // Validate request body
+    if (!body || typeof body !== "object") {
+      return NextResponse.json(
+        { success: false, error: "Invalid request body" },
+        { status: 400 }
+      );
+    }
+
     const validatedData = presenceSchema.parse(body);
 
     // Apply rate limiting
@@ -195,37 +219,11 @@ export async function POST(request: NextRequest) {
     // Get current participants
     let participants = presenceCache.get(roomId) || [];
 
-    // Find existing entry for this user
-    const existingParticipant = participants.find((p) => p.userId === userId);
-    const now = Date.now();
-
-    // Only update if significant time has passed (30 seconds) to reduce unnecessary updates
-    if (existingParticipant) {
-      if (now - existingParticipant.lastUpdated < 30000) {
-        // Just update the timestamp without any DB operations
-        existingParticipant.timestamp = validatedData.timestamp;
-        existingParticipant.lastUpdated = now;
-
-        // Update cache
-        presenceCache.set(roomId, participants);
-
-        return NextResponse.json({ success: true, cached: true });
-      }
-
-      // Remove existing entry for this user
-      participants = participants.filter((p) => p.userId !== userId);
-    } else {
-      // For new participants, verify room exists
-      const exists = await roomExists(roomId);
-      if (!exists) {
-        return NextResponse.json(
-          { success: false, error: "Room not found" },
-          { status: 404 }
-        );
-      }
-    }
+    // Remove any existing entries for this user (prevent duplicates)
+    participants = participants.filter((p) => p.userId !== userId);
 
     // Add new presence data
+    const now = Date.now();
     participants.push({
       userId: validatedData.userId,
       peerId: validatedData.peerId,
@@ -239,6 +237,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error registering presence:", error);
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { success: false, error: "Invalid request data", details: error.errors },
+        { status: 400 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: "Failed to register presence" },
       { status: 500 }
@@ -252,10 +256,21 @@ export async function DELETE(request: NextRequest) {
     const body = await request.json();
     const validatedData = deletePresenceSchema.parse(body);
 
+    // Apply rate limiting
+    const clientIp = request.headers.get("x-forwarded-for") || "unknown";
+    const rateKey = `delete:${clientIp}:${validatedData.roomId}:${validatedData.userId}`;
+
+    if (!checkRateLimit(rateKey)) {
+      return NextResponse.json(
+        { success: false, error: "Rate limit exceeded" },
+        { status: 429 }
+      );
+    }
+
     // Get current participants
     let participants = presenceCache.get(validatedData.roomId) || [];
 
-    // Remove user from participants
+    // Remove the user's presence
     participants = participants.filter(
       (p) => p.userId !== validatedData.userId
     );

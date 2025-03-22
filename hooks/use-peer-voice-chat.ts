@@ -35,6 +35,232 @@ export function usePeerVoiceChat(roomId: string) {
   const presenceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const participantPollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Toggle mute function
+  const toggleMute = useCallback(() => {
+    if (!localStreamRef.current) return;
+
+    const audioTracks = localStreamRef.current.getAudioTracks();
+    audioTracks.forEach((track) => {
+      track.enabled = !isMuted;
+    });
+
+    setIsMuted((prev) => !prev);
+  }, [isMuted]);
+
+  // Call a peer
+  const callPeer = useCallback((peerId: string, userId: string) => {
+    if (!peerRef.current || !localStreamRef.current) return;
+
+    // Don't call if we already have a connection
+    if (peersRef.current.has(userId)) return;
+
+    console.log(`Calling peer: ${peerId}`);
+    const call = peerRef.current.call(peerId, localStreamRef.current);
+
+    // Handle call stream
+    call.on("stream", (remoteStream) => {
+      console.log(`Received audio stream from:`, userId);
+
+      // Create audio element
+      const audio = new Audio();
+      audio.srcObject = remoteStream;
+      audio.autoplay = true;
+      audio.setAttribute("playsinline", "true");
+      audio.muted = false;
+
+      // Try to play immediately
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.error("Error playing audio:", err);
+          // Try again after a short delay
+          setTimeout(() => {
+            audio
+              .play()
+              .catch((e) => console.error("Retry error playing audio:", e));
+          }, 1000);
+        });
+      }
+
+      // Store the peer connection
+      peersRef.current.set(userId, {
+        peerId,
+        call,
+        audio,
+        type: "audio",
+      });
+
+      // Add to participants
+      setParticipants((prev) => {
+        if (!prev.includes(userId)) {
+          return [...prev, userId];
+        }
+        return prev;
+      });
+
+      // Register audio element for volume control
+      if (audioElementsCallbackRef.current) {
+        audioElementsCallbackRef.current(userId, audio);
+      }
+    });
+
+    // Handle call close
+    call.on("close", () => {
+      console.log(`Audio call closed with:`, userId);
+
+      // Clean up audio
+      const peer = peersRef.current.get(userId);
+      if (peer && peer.audio) {
+        peer.audio.srcObject = null;
+      }
+      peersRef.current.delete(userId);
+
+      // Remove from participants
+      setParticipants((prev) => prev.filter((id) => id !== userId));
+    });
+
+    // Handle call errors
+    call.on("error", (err) => {
+      console.error(`Audio call error with`, userId, ":", err);
+      setError(`Call error: ${err.message || "Unknown error"}`);
+    });
+  }, []);
+
+  // Fetch participants from server
+  const fetchParticipants = useCallback(async () => {
+    if (!peerRef.current) return;
+
+    try {
+      const response = await fetch(`/api/rooms/presence?roomId=${roomId}`);
+      const data = await response.json();
+
+      if (!data.success) {
+        console.error("Failed to fetch participants:", data.error);
+        return;
+      }
+
+      // Update participants list - filter out duplicates and own ID
+      const currentParticipants = data.participants
+        .filter((p: RoomParticipant) => p.userId !== userIdRef.current) // Remove own ID
+        .filter((p: RoomParticipant, index: number, self: RoomParticipant[]) => 
+          index === self.findIndex((t) => t.userId === p.userId) // Remove duplicates
+        )
+        .map((p: RoomParticipant) => p.userId);
+
+      setParticipants(currentParticipants);
+
+      // Call new participants
+      currentParticipants.forEach((participantId: string) => {
+        const participant = data.participants.find(
+          (p: RoomParticipant) => p.userId === participantId
+        );
+        if (participant && participant.peerId !== peerRef.current?.id && !peersRef.current.has(participantId)) {
+          callPeer(participant.peerId, participantId);
+        }
+      });
+    } catch (error) {
+      console.error("Error fetching participants:", error);
+    }
+  }, [roomId, callPeer]);
+
+  // Start polling for participants
+  const startParticipantPolling = useCallback(() => {
+    // Initial fetch
+    fetchParticipants();
+
+    // Set up interval for polling
+    participantPollingIntervalRef.current = setInterval(fetchParticipants, 10000);
+  }, [fetchParticipants]);
+
+  // Cleanup function
+  const disconnect = useCallback(() => {
+    // Remove presence from server
+    fetch(`/api/rooms/presence`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        roomId,
+        userId: userIdRef.current,
+      }),
+    }).catch((err) => console.error("Error removing presence:", err));
+
+    // Clear intervals
+    if (presenceIntervalRef.current) {
+      clearInterval(presenceIntervalRef.current);
+    }
+    if (participantPollingIntervalRef.current) {
+      clearInterval(participantPollingIntervalRef.current);
+    }
+
+    // Close all peer connections
+    peersRef.current.forEach((peer) => {
+      if (peer.audio) {
+        peer.audio.srcObject = null;
+      }
+      if (peer.call) {
+        peer.call.close();
+      }
+    });
+    peersRef.current.clear();
+
+    // Close peer connection
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+
+    // Stop local stream
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+
+    setIsConnected(false);
+    setParticipants([]);
+  }, [roomId]);
+
+  // Register callback for audio elements
+  const registerAudioElementsCallback = useCallback(
+    (callback: (id: string, audio: HTMLAudioElement) => void) => {
+      audioElementsCallbackRef.current = callback;
+    },
+    []
+  );
+
+  // Broadcast presence to server
+  const broadcastPresence = useCallback(async () => {
+    if (!peerRef.current) return;
+
+    try {
+      const presenceData = {
+        roomId,
+        userId: userIdRef.current,
+        peerId: `${roomPrefixRef.current}${userIdRef.current}`,
+        timestamp: Date.now(),
+      };
+
+      // Send presence to server API
+      const response = await fetch("/api/rooms/presence", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(presenceData),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        console.error("Error broadcasting presence:", error);
+      } else {
+        console.log("Presence broadcast to server");
+      }
+    } catch (error) {
+      console.error("Error broadcasting presence:", error);
+    }
+  }, [roomId]);
+
   // Initialize PeerJS and WebRTC connections
   useEffect(() => {
     let mounted = true;
@@ -49,11 +275,19 @@ export function usePeerVoiceChat(roomId: string) {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 1,
           },
           video: false,
         });
 
         if (!mounted) return;
+        
+        // Set initial mute state
+        stream.getAudioTracks().forEach(track => {
+          track.enabled = !isMuted;
+        });
+        
         localStreamRef.current = stream;
 
         // Create a unique peer ID for this user in this room
@@ -82,13 +316,13 @@ export function usePeerVoiceChat(roomId: string) {
         peerRef.current = peer;
 
         // Handle peer open event
-        peer.on("open", (id) => {
+        peer.on("open", async (id) => {
           console.log("Connected to PeerJS server with ID:", id);
           setIsConnected(true);
           setIsLoading(false);
 
           // Announce presence to other peers via server
-          broadcastPresence();
+          await broadcastPresence();
 
           // Start polling for participants
           startParticipantPolling();
@@ -213,163 +447,6 @@ export function usePeerVoiceChat(roomId: string) {
       }
     };
 
-    // Broadcast presence to server
-    const broadcastPresence = async () => {
-      if (!peerRef.current) return;
-
-      try {
-        // Send presence to server API
-        await fetch("/api/rooms/presence", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            roomId,
-            userId: userIdRef.current,
-            peerId: `${roomPrefixRef.current}${userIdRef.current}`,
-            timestamp: Date.now(),
-          }),
-        });
-
-        console.log("Presence broadcast to server");
-      } catch (error) {
-        console.error("Error broadcasting presence:", error);
-      }
-    };
-
-    // Poll for participants from server
-    const startParticipantPolling = () => {
-      // Initial fetch
-      fetchParticipants();
-
-      // Set up interval for polling - increase to 10 seconds from 5 seconds
-      participantPollingIntervalRef.current = setInterval(
-        fetchParticipants,
-        10000
-      );
-    };
-
-    // Fetch participants from server
-    const fetchParticipants = async () => {
-      if (!peerRef.current) return;
-
-      // Add timestamp to prevent browser caching
-      const timestamp = Date.now();
-
-      try {
-        const response = await fetch(
-          `/api/rooms/presence?roomId=${encodeURIComponent(
-            roomId
-          )}&_t=${timestamp}`
-        );
-        if (!response.ok) {
-          throw new Error("Failed to fetch participants");
-        }
-
-        const data = await response.json();
-
-        if (data.success && Array.isArray(data.participants)) {
-          // Filter out our own ID and get only userIds
-          const otherParticipants = data.participants
-            .filter((p: RoomParticipant) => p.userId !== userIdRef.current)
-            .map((p: RoomParticipant) => p.userId);
-
-          // Only call new peers we're not already connected to
-          otherParticipants.forEach((participantId: string) => {
-            if (!peersRef.current.has(participantId)) {
-              const participantData = data.participants.find(
-                (p: RoomParticipant) => p.userId === participantId
-              );
-
-              if (participantData) {
-                callPeer(participantData.peerId, participantData.userId);
-              }
-            }
-          });
-        }
-      } catch (error) {
-        console.error("Error fetching participants:", error);
-      }
-    };
-
-    // Call a peer
-    const callPeer = (peerId: string, userId: string) => {
-      if (!peerRef.current || !localStreamRef.current) return;
-
-      console.log("Calling peer:", peerId);
-
-      // Call the peer
-      const call = peerRef.current.call(peerId, localStreamRef.current);
-
-      // Handle incoming stream
-      call.on("stream", (remoteStream) => {
-        console.log("Received stream from:", userId);
-
-        // Create audio element for remote stream
-        const audio = new Audio();
-        audio.srcObject = remoteStream;
-        audio.autoplay = true;
-        audio.setAttribute("playsinline", "true");
-        audio.muted = false;
-
-        // Try to play immediately
-        const playPromise = audio.play();
-        if (playPromise !== undefined) {
-          playPromise.catch((err) => {
-            console.error("Error playing audio:", err);
-            // Try again after a short delay
-            setTimeout(() => {
-              audio
-                .play()
-                .catch((e) => console.error("Retry error playing audio:", e));
-            }, 1000);
-          });
-        }
-
-        // Store the peer connection
-        peersRef.current.set(userId, {
-          peerId,
-          call,
-          audio,
-          type: "audio",
-        });
-
-        // Add to participants
-        setParticipants((prev) => {
-          if (!prev.includes(userId)) {
-            return [...prev, userId];
-          }
-          return prev;
-        });
-
-        // Register audio element for volume control
-        if (audioElementsCallbackRef.current) {
-          audioElementsCallbackRef.current(userId, audio);
-        }
-      });
-
-      // Handle call close
-      call.on("close", () => {
-        console.log("Call closed with:", userId);
-
-        // Clean up
-        const peer = peersRef.current.get(userId);
-        if (peer && peer.audio) {
-          peer.audio.srcObject = null;
-        }
-        peersRef.current.delete(userId);
-
-        // Remove from participants
-        setParticipants((prev) => prev.filter((id) => id !== userId));
-      });
-
-      // Handle call errors
-      call.on("error", (err) => {
-        console.error("Call error with", userId, ":", err);
-      });
-    };
-
     // Start the voice chat
     initializeVoiceChat();
 
@@ -422,7 +499,7 @@ export function usePeerVoiceChat(roomId: string) {
 
       peersRef.current.clear();
     };
-  }, [roomId]);
+  }, [roomId, broadcastPresence, startParticipantPolling]);
 
   // Handle mute/unmute
   useEffect(() => {
@@ -443,88 +520,6 @@ export function usePeerVoiceChat(roomId: string) {
       console.warn("Local stream not available for mute/unmute");
     }
   }, [isMuted]);
-
-  // Toggle mute
-  const toggleMute = useCallback(() => {
-    setIsMuted((prev) => {
-      const newMuted = !prev;
-      console.log(`Setting microphone muted: ${newMuted}`);
-
-      // Immediately apply to all audio tracks
-      if (localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = !newMuted;
-          console.log(`Audio track ${track.id} enabled: ${!newMuted}`);
-        });
-      }
-
-      return newMuted;
-    });
-  }, []);
-
-  // Disconnect from the room
-  const disconnect = useCallback(() => {
-    // Remove presence from server
-    fetch(`/api/rooms/presence`, {
-      method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        roomId,
-        userId: userIdRef.current,
-      }),
-    }).catch((err) => console.error("Error removing presence:", err));
-
-    // Clear intervals
-    if (presenceIntervalRef.current) {
-      clearInterval(presenceIntervalRef.current);
-    }
-
-    if (participantPollingIntervalRef.current) {
-      clearInterval(participantPollingIntervalRef.current);
-    }
-
-    // Close PeerJS connection
-    if (peerRef.current) {
-      peerRef.current.destroy();
-    }
-
-    // Stop local stream
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = null;
-    }
-
-    // Close all peer connections
-    peersRef.current.forEach((peer) => {
-      if (peer.call) {
-        peer.call.close();
-      }
-      if (peer.audio) {
-        peer.audio.srcObject = null;
-      }
-    });
-
-    peersRef.current.clear();
-    setIsConnected(false);
-    setParticipants([]);
-  }, [roomId]);
-
-  // Register callback for audio elements
-  const registerAudioElementsCallback = useCallback(
-    (callback: (id: string, audio: HTMLAudioElement) => void) => {
-      audioElementsCallbackRef.current = callback;
-
-      // Register existing audio elements
-      peersRef.current.forEach((peer, id) => {
-        if (peer.type === "audio" && peer.audio) {
-          callback(id, peer.audio);
-        }
-      });
-    },
-    []
-  );
 
   return {
     isConnected,

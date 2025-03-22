@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
+import { cn } from "@/lib/utils";
 
 interface VoiceChatRoomProps {
   roomId: string;
@@ -42,6 +43,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [volume] = useState(1);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingStates, setSpeakingStates] = useState<{ [key: string]: boolean }>({});
   const router = useRouter();
 
   const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -67,9 +69,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
         audio.muted = speakerMuted;
         audio.volume = volume;
 
-        if (speakerMuted) {
-          audio.pause();
-        } else {
+        if (!speakerMuted) {
           const playPromise = audio.play();
           if (playPromise !== undefined) {
             playPromise.catch((e) => console.error("Audio play error:", e));
@@ -86,11 +86,43 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
         audioElementsRef.current.set(id, audio);
         audio.muted = speakerMuted;
         audio.volume = volume;
+
+        // Set up speaking detection for other participants
+        if (id !== userId) {
+          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const analyser = audioContext.createAnalyser();
+          const source = audioContext.createMediaStreamSource(audio.srcObject as MediaStream);
+          
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.8;
+          source.connect(analyser);
+
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+          const checkAudioLevel = () => {
+            analyser.getByteFrequencyData(dataArray);
+            const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+            setSpeakingStates(prev => ({
+              ...prev,
+              [id]: average > 20
+            }));
+            requestAnimationFrame(checkAudioLevel);
+          };
+
+          checkAudioLevel();
+        }
+
+        if (!speakerMuted) {
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch((e) => console.error("Audio play error:", e));
+          }
+        }
       };
 
       registerAudioElementsCallback(handleAudioElement);
     }
-  }, [isConnected, registerAudioElementsCallback, speakerMuted, volume]);
+  }, [isConnected, registerAudioElementsCallback, speakerMuted, volume, userId]);
 
   // Setup audio visualization for speaking detection
   useEffect(() => {
@@ -179,6 +211,13 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
     return id.substring(0, 2).toUpperCase();
   };
 
+  // Filter out duplicate participants and own user ID
+  const uniqueParticipants = participants.filter(
+    (participantId, index, self) => {
+      return self.indexOf(participantId) === index && participantId !== userId;
+    }
+  );
+
   if (permissionGranted === false) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-[#121212] text-white p-4">
@@ -248,108 +287,87 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
         {/* Participants */}
         <div className="mb-4 flex justify-between items-center">
-          <h2 className="text-md font-medium">Participants</h2>
-          <div className="bg-[#3a3a3a] rounded-full w-5 h-5 flex items-center justify-center text-xs">
-            {participants.length + 1}
-          </div>
+          <h2 className="text-sm font-medium text-gray-300">Participants</h2>
+          <span className="text-xs text-white bg-zinc-600 rounded-full p-1 size-5 flex items-center justify-center ">
+            {uniqueParticipants.length + 1}
+          </span>
         </div>
 
-        {/* Participant List */}
-        <div className="flex-1 overflow-y-auto space-y-2 mb-4">
-          {/* Current User */}
-          <div className="bg-[#1e1e1e] rounded-xl p-3">
-            <div className="flex items-center">
-              <div className="relative">
-                <Avatar className="h-12 w-12 bg-[#3a3a3a] text-white flex items-center justify-center border-2 border-[#1e1e1e]">
-                  <div>{getInitials(userId)}</div>
-                </Avatar>
-                {isSpeaking && !isMuted && (
-                  <div className="absolute bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-[#1e1e1e]"></div>
+        <div className="space-y-2 flex-grow overflow-y-auto">
+          {/* Current user */}
+          <div className="flex items-center justify-between bg-[#1e1e1e] rounded-[8px] p-3">
+            <div className="flex items-center space-x-3">
+              <Avatar
+                className={cn(
+                  "h-8 w-8 bg-[#2a2a2a] flex items-center justify-center",
+                  isSpeaking && "border border-green-500"
                 )}
-              </div>
-              <div className="ml-3 flex-1">
-                <div className="">{userId} (You)</div>
-                <div className="text-sm text-gray-400">
-                  {isSpeaking && !isMuted ? "Speaking" : "Not speaking"}
+              >
+                <div className="text-xs">{getInitials(userId)}</div>
+              </Avatar>
+              <div>
+                <div className="text-sm">
+                  {userId} <span className="text-gray-400">(You)</span>
+                </div>
+                <div className="text-xs text-gray-500">
+                  {isSpeaking ? "Speaking" : "Not speaking"}
                 </div>
               </div>
-              <div className="flex space-x-2">
-                <button
-                  className={`p-2 rounded-full ${
-                    speakerMuted
-                      ? "bg-red-900/30 text-red-500"
-                      : "text-gray-400 hover:text-white"
-                  }`}
-                  onClick={toggleSpeakerMute}
-                >
-                  {speakerMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-                </button>
-                <button
-                  className={`p-2 rounded-full ${
-                    isMuted
-                      ? "bg-red-900/30 text-red-500"
-                      : "text-gray-400 hover:text-white"
-                  }`}
-                  onClick={toggleMute}
-                >
-                  {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
-                </button>
-              </div>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button
+                className="text-gray-400 hover:text-white"
+                onClick={toggleSpeakerMute}
+              >
+                {speakerMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              </button>
+              <button
+                className={cn(
+                  "text-gray-400 hover:text-white",
+                  !isMuted && "text-green-600 hover:text-green-700"
+                )}
+                onClick={toggleMute}
+              >
+                {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
             </div>
           </div>
 
-          {/* Other Participants */}
-          {participants.map((participantId) => (
-            <div key={participantId} className="bg-[#1e1e1e] rounded-lg p-3">
-              <div className="flex items-center">
-                <div className="relative">
-                  <Avatar className="h-12 w-12 bg-[#3a3a3a] text-white flex items-center justify-center border-2 border-[#1e1e1e]">
-                    <div>{getInitials(participantId)}</div>
-                  </Avatar>
-                </div>
-                <div className="ml-3 flex-1">
-                  <div className="font-medium">{participantId}</div>
-                  <div className="text-sm text-gray-400">Connected</div>
+          {/* Other participants */}
+          {uniqueParticipants.map((participantId) => (
+            <div
+              key={participantId}
+              className="flex items-center justify-between bg-[#1e1e1e] rounded-[8px] p-3"
+            >
+              <div className="flex items-center space-x-3">
+                <Avatar className={cn(
+                  "h-8 w-8 bg-[#2a2a2a] flex items-center justify-center",
+                  speakingStates[participantId] && "border border-green-500"
+                )}>
+                  <div className="text-xs">{getInitials(participantId)}</div>
+                </Avatar>
+                <div>
+                  <div className="text-sm">{participantId}</div>
+                  <div className="text-xs text-gray-500">
+                    {speakingStates[participantId] ? "Speaking" : "Not speaking"}
+                  </div>
                 </div>
               </div>
+              <div className="text-xs text-gray-500">Connected</div>
             </div>
           ))}
-
-          {/* Empty State */}
-          {participants.length === 0 && !isLoading && (
-            <div className="bg-[#1e1e1e] rounded-xl p-6 text-center text-gray-400">
-              <p className="text-sm">No other participants yet.</p>
-              <p className="text-sm">Share the room link to invite others.</p>
-            </div>
-          )}
-
-          {/* Loading State */}
-          {isLoading && participants.length === 0 && (
-            <div className="bg-[#1e1e1e] rounded-xl p-6 py-5 text-center text-gray-400">
-              <Loader className="h-4 w-4 mx-auto mb-2 animate-spin" />
-              <p className="text-sm">Looking for participants...</p>
-            </div>
-          )}
         </div>
 
-        {/* Error Message */}
-        {error && (
-          <div className="bg-red-900/20 border border-red-800 text-red-300 px-4 py-3 rounded-lg mb-4">
-            <p className="text-sm">{error}</p>
-          </div>
-        )}
-
-        {/* Bottom Controls */}
+        {/* Leave button */}
         <Button
-          variant="destructive"
-          className="w-full rounded-lg overflow-hidden"
+          className="mt-4 w-full mx-auto bg-red-700 hover:bg-red-800 text-white rounded-[6px]"
           onClick={() => {
             disconnect();
             router.push("/");
           }}
         >
-          <LogOut size={16} />
-          <span>Leave Room</span>
+          <LogOut className="h-4 w-4 mr-2" />
+          Leave Room
         </Button>
       </div>
     </div>
