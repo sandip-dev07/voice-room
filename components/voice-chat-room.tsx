@@ -9,10 +9,8 @@ import {
   Volume2,
   VolumeX,
   RefreshCw,
-  Settings,
   Copy,
   LogOut,
-  Loader,
   Check,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -27,7 +25,6 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   const {
     isConnected,
     isMuted,
-    error,
     participants,
     userId,
     toggleMute,
@@ -43,7 +40,9 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [volume] = useState(1);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [speakingStates, setSpeakingStates] = useState<{ [key: string]: boolean }>({});
+  const [speakingStates, setSpeakingStates] = useState<{
+    [key: string]: boolean;
+  }>({});
   const router = useRouter();
 
   const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -89,10 +88,13 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
         // Set up speaking detection for other participants
         if (id !== userId) {
-          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const audioContext = new (window.AudioContext ||
+            (window as any).webkitAudioContext)();
           const analyser = audioContext.createAnalyser();
-          const source = audioContext.createMediaStreamSource(audio.srcObject as MediaStream);
-          
+          const source = audioContext.createMediaStreamSource(
+            audio.srcObject as MediaStream
+          );
+
           analyser.fftSize = 256;
           analyser.smoothingTimeConstant = 0.8;
           source.connect(analyser);
@@ -101,10 +103,12 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
           const checkAudioLevel = () => {
             analyser.getByteFrequencyData(dataArray);
-            const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
-            setSpeakingStates(prev => ({
+            const average =
+              dataArray.reduce((sum, value) => sum + value, 0) /
+              dataArray.length;
+            setSpeakingStates((prev) => ({
               ...prev,
-              [id]: average > 20
+              [id]: average > 20,
             }));
             requestAnimationFrame(checkAudioLevel);
           };
@@ -122,7 +126,13 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
       registerAudioElementsCallback(handleAudioElement);
     }
-  }, [isConnected, registerAudioElementsCallback, speakerMuted, volume, userId]);
+  }, [
+    isConnected,
+    registerAudioElementsCallback,
+    speakerMuted,
+    volume,
+    userId,
+  ]);
 
   // Setup audio visualization for speaking detection
   useEffect(() => {
@@ -265,7 +275,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
         </div>
 
         {/* Title */}
-        <div className="text-center mb-6">
+        <div className="text-center mb-6 flex items-center justify-between">
           <h1 className="text-lg font-bold mb-2">Voice Chat</h1>
           {isLoading ? (
             <div className="inline-flex items-center px-2 py-1 rounded-full bg-[#3a3a3a] text-xs">
@@ -340,16 +350,20 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
               className="flex items-center justify-between bg-[#1e1e1e] rounded-[8px] p-3"
             >
               <div className="flex items-center space-x-3">
-                <Avatar className={cn(
-                  "h-8 w-8 bg-[#2a2a2a] flex items-center justify-center",
-                  speakingStates[participantId] && "border border-green-500"
-                )}>
+                <Avatar
+                  className={cn(
+                    "h-8 w-8 bg-[#2a2a2a] flex items-center justify-center",
+                    speakingStates[participantId] && "border border-green-500"
+                  )}
+                >
                   <div className="text-xs">{getInitials(participantId)}</div>
                 </Avatar>
                 <div>
                   <div className="text-sm">{participantId}</div>
                   <div className="text-xs text-gray-500">
-                    {speakingStates[participantId] ? "Speaking" : "Not speaking"}
+                    {speakingStates[participantId]
+                      ? "Speaking"
+                      : "Not speaking"}
                   </div>
                 </div>
               </div>
@@ -360,7 +374,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
         {/* Leave button */}
         <Button
-          className="mt-4 w-full mx-auto bg-red-700 hover:bg-red-800 text-white rounded-[6px]"
+          className="mt-4 max-w-md w-full fixed bottom-4 left-1/2 -translate-x-1/2 mx-auto bg-red-700 hover:bg-red-800 text-white rounded-[6px]"
           onClick={() => {
             disconnect();
             router.push("/");

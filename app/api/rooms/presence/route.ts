@@ -1,31 +1,23 @@
 import { type NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { redis } from "@/lib/redis";
 import { z } from "zod";
+import { v4 as uuidv4 } from "uuid";
 
-// In-memory cache for faster access
-const presenceCache = new Map<
-  string,
-  {
-    userId: string;
-    peerId: string;
-    timestamp: number;
-    lastUpdated: number; // Track when this entry was last updated
-  }[]
->();
+// Types
+type ParticipantData = {
+  userId: string;
+  peerId: string;
+  timestamp: number;
+};
 
-// Cache for room existence checks to avoid repeated DB queries
-const roomExistenceCache = new Map<
-  string,
-  {
-    exists: boolean;
-    expiresAt: number; // Cache expiration timestamp
-  }
->();
+// Constants
+const PRESENCE_TIMEOUT = 120000; // 2 minutes
+const ROOM_EXPIRY = 5 * 24 * 60 * 60; // 5 days
 
 // Schema for presence data
 const presenceSchema = z.object({
   roomId: z.string(),
-  userId: z.string(),
+  userId: z.string().optional(),
   peerId: z.string(),
   timestamp: z.number(),
 });
@@ -36,82 +28,22 @@ const deletePresenceSchema = z.object({
   userId: z.string(),
 });
 
-// Cache TTL in milliseconds (5 minutes)
-const CACHE_TTL = 5 * 60 * 1000;
+// Helper functions
+const getRoomKey = (roomId: string) => `room:${roomId}:participants`;
 
-// Rate limiting map
-const rateLimitMap = new Map<string, number>();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 120; // 2 requests per second on average
-
-// Check if a room exists (with caching)
-async function roomExists(roomId: string): Promise<boolean> {
-  // Check cache first
-  const cachedResult = roomExistenceCache.get(roomId);
-  const now = Date.now();
-
-  if (cachedResult && cachedResult.expiresAt > now) {
-    return cachedResult.exists;
-  }
-
-  // Cache miss or expired, query the database
+const parseParticipantData = (data: string | null): ParticipantData | null => {
+  if (!data) return null;
   try {
-    const room = await prisma.room.findUnique({
-      where: { roomId },
-      select: { id: true }, // Only select the ID field for efficiency
-    });
-
-    const exists = !!room;
-
-    // Cache the result
-    roomExistenceCache.set(roomId, {
-      exists,
-      expiresAt: now + CACHE_TTL,
-    });
-
-    return exists;
-  } catch (error) {
-    console.error("Error checking room existence:", error);
-    return false;
+    return typeof data === 'string' ? JSON.parse(data) : data;
+  } catch {
+    return null;
   }
-}
-
-// Rate limiting function
-function checkRateLimit(key: string): boolean {
-  const now = Date.now();
-
-  // Clean up old entries
-  for (const [entryKey, timestamp] of Array.from(rateLimitMap.entries())) {
-    if (now - timestamp > RATE_LIMIT_WINDOW) {
-      rateLimitMap.delete(entryKey);
-    }
-  }
-
-  // Count requests for this key in the current window
-  let count = 0;
-  for (const [entryKey, timestamp] of Array.from(rateLimitMap.entries())) {
-    if (entryKey.startsWith(key) && now - timestamp <= RATE_LIMIT_WINDOW) {
-      count++;
-    }
-  }
-
-  // Check if rate limit exceeded
-  if (count >= MAX_REQUESTS_PER_WINDOW) {
-    return false;
-  }
-
-  // Add this request to the map
-  const requestKey = `${key}:${now}`;
-  rateLimitMap.set(requestKey, now);
-  return true;
-}
+};
 
 // Get participants in a room
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const roomId = searchParams.get("roomId");
-
+    const roomId = request.nextUrl.searchParams.get("roomId");
     if (!roomId) {
       return NextResponse.json(
         { success: false, error: "Room ID is required" },
@@ -119,52 +51,26 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Apply rate limiting
-    const clientIp = request.headers.get("x-forwarded-for") || "unknown";
-    const rateKey = `get:${clientIp}:${roomId}`;
-
-    if (!checkRateLimit(rateKey)) {
-      return NextResponse.json(
-        { success: false, error: "Rate limit exceeded" },
-        { status: 429 }
-      );
-    }
-
-    // Get participants from cache
-    let participants = presenceCache.get(roomId) || [];
-
-    // Only check room existence if cache is empty (first request)
-    if (participants.length === 0) {
-      const exists = await roomExists(roomId);
-      if (!exists) {
-        return NextResponse.json(
-          { success: false, error: "Room not found" },
-          { status: 404 }
-        );
-      }
-    }
-
-    // Clean up stale participants (older than 2 minutes) and remove duplicates
+    const participants = await redis.hgetall(getRoomKey(roomId)) || {};
     const now = Date.now();
-    participants = participants
-      .filter((p) => now - p.timestamp < 120000)
-      .filter((p, index, self) => 
-        index === self.findIndex((t) => t.userId === p.userId)
-      );
 
-    // Update cache
-    presenceCache.set(roomId, participants);
-
-    // Return only necessary data to reduce payload size
-    const simplifiedParticipants = participants.map((p) => ({
-      userId: p.userId,
-      peerId: p.peerId,
-      timestamp: p.timestamp,
-    }));
+    const activeParticipants = Object.entries(participants as Record<string, string>)
+      .map(([userId, data]) => {
+        const participant = parseParticipantData(data);
+        if (!participant || now - participant.timestamp >= PRESENCE_TIMEOUT) {
+          return null;
+        }
+        return {
+          userId,
+          peerId: participant.peerId,
+          timestamp: participant.timestamp,
+        };
+      })
+      .filter((participant): participant is NonNullable<typeof participant> => participant !== null);
 
     return NextResponse.json({
       success: true,
-      participants: simplifiedParticipants,
+      participants: activeParticipants,
     });
   } catch (error) {
     console.error("Error getting room participants:", error);
@@ -178,63 +84,28 @@ export async function GET(request: NextRequest) {
 // Register presence in a room
 export async function POST(request: NextRequest) {
   try {
-    // Check if request has a body
-    const contentType = request.headers.get("content-type");
-    if (!contentType || !contentType.includes("application/json")) {
-      return NextResponse.json(
-        { success: false, error: "Content-Type must be application/json" },
-        { status: 400 }
-      );
-    }
-
-    // Clone the request to read the body twice if needed
-    const clonedRequest = request.clone();
-    const body = await clonedRequest.json();
-
-    // Validate request body
-    if (!body || typeof body !== "object") {
-      return NextResponse.json(
-        { success: false, error: "Invalid request body" },
-        { status: 400 }
-      );
-    }
-
+    const body = await request.json();
     const validatedData = presenceSchema.parse(body);
 
-    // Apply rate limiting
-    const clientIp = request.headers.get("x-forwarded-for") || "unknown";
-    const rateKey = `post:${clientIp}:${validatedData.roomId}:${validatedData.userId}`;
-
-    if (!checkRateLimit(rateKey)) {
-      return NextResponse.json(
-        { success: false, error: "Rate limit exceeded" },
-        { status: 429 }
-      );
-    }
-
-    // Check if room exists (only on first presence update)
+    const userId = validatedData.userId || uuidv4();
     const roomId = validatedData.roomId;
-    const userId = validatedData.userId;
 
-    // Get current participants
-    let participants = presenceCache.get(roomId) || [];
-
-    // Remove any existing entries for this user (prevent duplicates)
-    participants = participants.filter((p) => p.userId !== userId);
-
-    // Add new presence data
-    const now = Date.now();
-    participants.push({
-      userId: validatedData.userId,
+    const participantData: ParticipantData = {
+      userId,
       peerId: validatedData.peerId,
       timestamp: validatedData.timestamp,
-      lastUpdated: now,
+    };
+
+    // Use pipeline for atomic operations
+    const pipeline = redis.pipeline();
+    pipeline.hset(getRoomKey(roomId), { [userId]: JSON.stringify(participantData) });
+    pipeline.expire(getRoomKey(roomId), ROOM_EXPIRY);
+    await pipeline.exec();
+
+    return NextResponse.json({ 
+      success: true,
+      userId
     });
-
-    // Update cache
-    presenceCache.set(roomId, participants);
-
-    return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error registering presence:", error);
     if (error instanceof z.ZodError) {
@@ -256,31 +127,17 @@ export async function DELETE(request: NextRequest) {
     const body = await request.json();
     const validatedData = deletePresenceSchema.parse(body);
 
-    // Apply rate limiting
-    const clientIp = request.headers.get("x-forwarded-for") || "unknown";
-    const rateKey = `delete:${clientIp}:${validatedData.roomId}:${validatedData.userId}`;
-
-    if (!checkRateLimit(rateKey)) {
-      return NextResponse.json(
-        { success: false, error: "Rate limit exceeded" },
-        { status: 429 }
-      );
-    }
-
-    // Get current participants
-    let participants = presenceCache.get(validatedData.roomId) || [];
-
-    // Remove the user's presence
-    participants = participants.filter(
-      (p) => p.userId !== validatedData.userId
-    );
-
-    // Update cache
-    presenceCache.set(validatedData.roomId, participants);
+    await redis.hdel(getRoomKey(validatedData.roomId), validatedData.userId);
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error removing presence:", error);
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { success: false, error: "Invalid request data", details: error.errors },
+        { status: 400 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: "Failed to remove presence" },
       { status: 500 }

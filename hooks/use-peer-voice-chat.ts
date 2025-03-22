@@ -26,7 +26,7 @@ export function usePeerVoiceChat(roomId: string) {
 
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const userIdRef = useRef<string>(uuidv4().substring(0, 8));
+  const userIdRef = useRef<string>(localStorage.getItem(`voicechat-userid-${roomId}`) ?? uuidv4().substring(0, 8));
   const peersRef = useRef<Map<string, PeerConnection>>(new Map());
   const roomPrefixRef = useRef<string>(`voicechat-${roomId}-`);
   const audioElementsCallbackRef = useRef<
@@ -34,6 +34,13 @@ export function usePeerVoiceChat(roomId: string) {
   >(null);
   const presenceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const participantPollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Store user ID in localStorage when it's first created
+  useEffect(() => {
+    if (!localStorage.getItem(`voicechat-userid-${roomId}`)) {
+      localStorage.setItem(`voicechat-userid-${roomId}`, userIdRef.current);
+    }
+  }, [roomId]);
 
   // Toggle mute function
   const toggleMute = useCallback(() => {
@@ -216,6 +223,9 @@ export function usePeerVoiceChat(roomId: string) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
     }
+
+    // Remove user ID from localStorage when explicitly disconnecting
+    localStorage.removeItem(`voicechat-userid-${roomId}`);
 
     setIsConnected(false);
     setParticipants([]);
