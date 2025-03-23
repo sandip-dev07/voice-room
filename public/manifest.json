@@ -1,6 +1,6 @@
 {
-  "name": "Voice Chat App",
-  "short_name": "Voice Chat",
+  "name": "x Meet",
+  "short_name": "x Meet",
   "description": "A real-time voice chat application",
   "start_url": "/",
   "display": "standalone",
@@ -18,4 +18,4 @@
       "type": "image/png"
     }
   ]
-} 
+}
