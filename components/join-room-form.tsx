@@ -173,8 +173,8 @@ export default function JoinRoomForm() {
   };
 
   return (
-    <div className="flex flex-col h-screen ">
-      <div className="min-w-[400px] mx-auto flex flex-col justify-center h-full">
+    <div className="flex flex-col h-screen w-full p-0">
+      <div className="max-w-md w-[100%] mx-auto flex flex-col justify-center h-full p-0">
         {/* Header with App Logo */}
         <div className="flex justify-between items-center mb-8 bg-[#1e1e1e]/80 backdrop-blur-sm rounded-[8px] p-3 shadow-md border border-green-900/20">
           <div className="flex items-center space-x-3">

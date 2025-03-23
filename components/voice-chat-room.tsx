@@ -283,7 +283,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-b from-[#121212] to-[#1a1a1a] text-white p-6">
+    <div className="flex flex-col h-screen bg-gradient-to-b from-[#121212] to-[#1a1a1a] text-white p-3">
       <div className="max-w-md w-full mx-auto flex flex-col h-full relative">
         {/* Header with App Logo */}
         <div className="flex justify-between items-center mb-8 bg-[#1e1e1e]/80 backdrop-blur-sm rounded-xl p-3 shadow-md border border-green-900/20">
