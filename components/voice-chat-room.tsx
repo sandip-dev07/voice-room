@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { usePeerVoiceChat } from "@/hooks/use-peer-voice-chat";
-import { Avatar } from "@/components/ui/avatar";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import {
   Mic,
   MicOff,
@@ -16,6 +16,7 @@ import {
 import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
+import Image from "next/image";
 
 interface VoiceChatRoomProps {
   roomId: string;
@@ -43,6 +44,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   const [speakingStates, setSpeakingStates] = useState<{
     [key: string]: boolean;
   }>({});
+  const [userName, setUserName] = useState<string>("");
   const router = useRouter();
 
   const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -50,6 +52,16 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataArrayRef = useRef<Uint8Array | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+
+  // Get user's name from localStorage
+  useEffect(() => {
+    const savedName = localStorage.getItem(`userName_${roomId}`);
+    if (savedName && savedName !== "skipped") {
+      setUserName(savedName);
+    } else {
+      setUserName(userId);
+    }
+  }, [roomId, userId]);
 
   // Check microphone permission
   useEffect(() => {
@@ -134,7 +146,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
     userId,
   ]);
 
-  // Setup audio visualization for speaking detection
+  // Set up audio visualization for current user
   useEffect(() => {
     if (!isConnected || isMuted) {
       setIsSpeaking(false);
@@ -216,9 +228,19 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
     setSpeakerMuted((prev) => !prev);
   };
 
-  // Generate initials from user ID
-  const getInitials = (id: string) => {
+  // Generate initials from name or user ID
+  const getInitials = (id: string, name?: string) => {
+    if (name) {
+      return name.substring(0, 2).toUpperCase();
+    }
     return id.substring(0, 2).toUpperCase();
+  };
+
+  // Generate avatar URL from user ID or name
+  const getAvatarUrl = (id: string, name?: string) => {
+    const seed = name || id;
+    // Use avatar.vercel.sh to generate avatar
+    return `https://avatar.vercel.sh/${encodeURIComponent(seed)}?size=80`;
   };
 
   // Filter out duplicate participants and own user ID
@@ -230,16 +252,22 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
   if (permissionGranted === false) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-[#121212] text-white p-4">
-        <div className="w-full max-w-md bg-[#1e1e1e] rounded-lg p-6 shadow-lg">
-          <h2 className="text-xl font-semibold mb-4 text-center">
+      <div className="flex flex-col items-center justify-center h-screen bg-gradient-to-b from-[#121212] to-[#1a1a1a] text-white p-6">
+        <div className="w-full max-w-md bg-[#1e1e1e]/90 backdrop-blur-md rounded-xl p-8 shadow-2xl border border-green-900/30">
+          <div className="flex flex-col items-center mb-6">
+            <div className="bg-green-500/20 p-4 rounded-full">
+              <MicOff size={15} className="text-green-400" />
+            </div>
+          </div>
+          <h2 className="text-xl font-bold mb-4 text-center bg-gradient-to-r from-green-400 to-emerald-400 bg-clip-text text-transparent">
             Microphone Access Required
           </h2>
-          <p className="text-gray-300 mb-6 text-center">
-            Please allow microphone access to use the voice chat feature.
+          <p className="text-gray-300 text-sm mb-8 text-center">
+            To join the voice chat, please allow microphone access in your
+            browser settings.
           </p>
           <Button
-            className="w-full bg-blue-600 hover:bg-blue-700"
+            className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-medium py-2 rounded-lg shadow-lg transition-all duration-300"
             onClick={() => {
               navigator.mediaDevices
                 .getUserMedia({ audio: true })
@@ -247,7 +275,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
                 .catch(() => setPermissionGranted(false));
             }}
           >
-            Request Access
+            Request Microphone Access
           </Button>
         </div>
       </div>
@@ -255,40 +283,67 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#121212] text-white p-4">
-      <div className="max-w-md w-full mx-auto flex flex-col h-full">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center space-x-2">
-            <div className="text-sm text-gray-400">
-              Room: <span className="text-gray-200">{roomId}</span>
+    <div className="flex flex-col h-screen bg-gradient-to-b from-[#121212] to-[#1a1a1a] text-white p-6">
+      <div className="max-w-md w-full mx-auto flex flex-col h-full relative">
+        {/* Header with App Logo */}
+        <div className="flex justify-between items-center mb-8 bg-[#1e1e1e]/80 backdrop-blur-sm rounded-xl p-3 shadow-md border border-green-900/20">
+          <div className="flex items-center space-x-3">
+            <Avatar
+              className={cn(
+                "h-7 w-7 rounded-[7px] shadow-md transition-all duration-300 overflow-hidden"
+              )}
+            >
+              <AvatarImage src={"/logo.jpg"} alt={""} />
+              <AvatarFallback className="h-8 w-8 rounded-[7px] bg-background">
+                {getInitials("1", "M")}
+              </AvatarFallback>
+            </Avatar>
+
+            {/* Room ID and Copy Button */}
+            <div className="flex items-center space-x-2">
+              <div className="text-xs font-medium">
+                <span className="text-gray-400 mr-1">Room:</span>
+                <span className="text-gray-200">{roomId}</span>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={copyRoomLink}
+                className="rounded-full h-6 w-6 p-0 flex items-center justify-center hover:bg-gray-700/50"
+              >
+                {copied ? <Check size={12} /> : <Copy size={12} />}
+              </Button>
             </div>
-            <Button size={"sm"} variant="ghost" onClick={copyRoomLink}>
-              {copied ? <Check size={8} /> : <Copy size={8} />}
-            </Button>
           </div>
-          <div className="flex space-x-4">
-            <button className="text-gray-400 hover:text-white">
-              <RefreshCw size={18} onClick={() => window.location.reload()} />
-            </button>
-          </div>
+
+          {/* Refresh Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="rounded-full h-7 w-7 p-0 flex items-center justify-center hover:bg-gray-700/50"
+            onClick={() => window.location.reload()}
+          >
+            <RefreshCw size={14} />
+          </Button>
         </div>
 
         {/* Title */}
-        <div className="text-center mb-6 flex items-center justify-between">
-          <h1 className="text-lg font-bold mb-2">Voice Chat</h1>
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-lg font-bold bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">
+            Voice Chat
+          </h1>
           {isLoading ? (
-            <div className="inline-flex items-center px-2 py-1 rounded-full bg-[#3a3a3a] text-xs">
-              <div className="w-2 h-2 bg-yellow-400 rounded-full mr-2"></div>
+            <div className="inline-flex items-center px-3 py-1.5 rounded-full bg-[#2a2a2a] text-xs font-medium shadow-inner">
+              <div className="w-2 h-2 bg-yellow-400 rounded-full mr-2 animate-pulse"></div>
               Connecting...
             </div>
           ) : isConnected ? (
-            <div className="inline-flex items-center px-2 py-1 rounded-full bg-[#3a3a3a] text-xs">
+            <div className="inline-flex items-center px-3 py-1.5 rounded-full bg-[#2a2a2a] text-xs font-medium shadow-inner">
               <div className="w-2 h-2 bg-green-400 rounded-full mr-2"></div>
               Connected
             </div>
           ) : (
-            <div className="inline-flex items-center px-2 py-1 rounded-full bg-[#3a3a3a] text-xs">
+            <div className="inline-flex items-center px-3 py-1.5 rounded-full bg-[#2a2a2a] text-xs font-medium shadow-inner">
               <div className="w-2 h-2 bg-red-400 rounded-full mr-2"></div>
               Disconnected
             </div>
@@ -297,92 +352,166 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
         {/* Participants */}
         <div className="mb-4 flex justify-between items-center">
-          <h2 className="text-sm font-medium text-gray-300">Participants</h2>
-          <span className="text-xs text-white bg-zinc-600 rounded-full p-1 size-5 flex items-center justify-center ">
+          <h2 className="text-sm font-semibold text-gray-200">Participants</h2>
+          <span className="text-xs font-medium text-white bg-green-600/80 rounded-full px-2 py-0.5 min-w-[20px] flex items-center justify-center">
             {uniqueParticipants.length + 1}
           </span>
         </div>
 
-        <div className="space-y-2 flex-grow overflow-y-auto">
+        <div className="space-y-2 flex-grow max-h-screen h-full overflow-y-auto border border-green-900/20 rounded-[12px] p-2">
           {/* Current user */}
-          <div className="flex items-center justify-between bg-[#1e1e1e] rounded-[8px] p-3">
+          <div className="flex items-center justify-between bg-[#1e1e1e]/80 rounded-xl p-4 mb-3 border border-gray-800 shadow-md transition-all duration-300 hover:bg-[#252525]/80">
             <div className="flex items-center space-x-3">
               <Avatar
                 className={cn(
-                  "h-8 w-8 bg-[#2a2a2a] flex items-center justify-center",
-                  isSpeaking && "border border-green-500"
+                  "h-9 w-9 shadow-md transition-all duration-300 overflow-hidden",
+                  isSpeaking &&
+                    "ring-2 ring-green-500 ring-offset-1 ring-offset-[#1a1a1a]"
                 )}
               >
-                <div className="text-xs">{getInitials(userId)}</div>
+                <AvatarImage
+                  src={getAvatarUrl(userId, userName)}
+                  alt={userName || userId}
+                />
+                <AvatarFallback className="bg-gradient-to-br from-green-500 to-emerald-600">
+                  {getInitials(userId, userName)}
+                </AvatarFallback>
               </Avatar>
               <div>
-                <div className="text-sm">
-                  {userId} <span className="text-gray-400">(You)</span>
+                <div className="text-sm font-medium">
+                  {userName || userId}{" "}
+                  <span className="text-xs bg-green-500/30 text-green-200 px-1.5 py-0.5 rounded-full ml-1">
+                    You
+                  </span>
                 </div>
-                <div className="text-xs text-gray-500">
-                  {isSpeaking ? "Speaking" : "Not speaking"}
+                <div className="text-xs text-gray-400 flex items-center">
+                  {isSpeaking ? (
+                    <>
+                      <span className="w-1.5 h-1.5 bg-green-400 rounded-full mr-1.5 animate-pulse"></span>
+                      Speaking
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-1.5 h-1.5 bg-gray-500 rounded-full mr-1.5"></span>
+                      Silent
+                    </>
+                  )}
                 </div>
               </div>
             </div>
-            <div className="flex items-center space-x-3">
-              <button
-                className="text-gray-400 hover:text-white"
-                onClick={toggleSpeakerMute}
-              >
-                {speakerMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-              </button>
-              <button
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="ghost"
+                size="sm"
                 className={cn(
-                  "text-gray-400 hover:text-white",
-                  !isMuted && "text-green-600 hover:text-green-700"
+                  "rounded-full h-8 w-8 p-0 flex items-center justify-center hover:bg-gray-700/50",
+                  isMuted
+                    ? "bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300"
+                    : "bg-green-500/20 text-green-400 hover:bg-green-500/30 hover:text-green-300"
                 )}
                 onClick={toggleMute}
               >
-                {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
-              </button>
+                {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
+              </Button>
             </div>
           </div>
 
           {/* Other participants */}
-          {uniqueParticipants.map((participantId) => (
-            <div
-              key={participantId}
-              className="flex items-center justify-between bg-[#1e1e1e] rounded-[8px] p-3"
-            >
-              <div className="flex items-center space-x-3">
-                <Avatar
-                  className={cn(
-                    "h-8 w-8 bg-[#2a2a2a] flex items-center justify-center",
-                    speakingStates[participantId] && "border border-green-500"
-                  )}
-                >
-                  <div className="text-xs">{getInitials(participantId)}</div>
-                </Avatar>
-                <div>
-                  <div className="text-sm">{participantId}</div>
-                  <div className="text-xs text-gray-500">
-                    {speakingStates[participantId]
-                      ? "Speaking"
-                      : "Not speaking"}
+          {uniqueParticipants.map((participantId) => {
+            const participantName = localStorage.getItem(
+              `userName_${roomId}_${participantId}`
+            );
+            return (
+              <div
+                key={participantId}
+                className="flex items-center justify-between bg-[#1e1e1e]/80 rounded-xl p-4 mb-3 border border-gray-800 shadow-md transition-all duration-300 hover:bg-[#252525]/80"
+              >
+                <div className="flex items-center space-x-3">
+                  <Avatar
+                    className={cn(
+                      "h-9 w-9 shadow-md transition-all duration-300 overflow-hidden",
+                      speakingStates[participantId] &&
+                        "ring-2 ring-green-500 ring-offset-1 ring-offset-[#1a1a1a]"
+                    )}
+                  >
+                    <AvatarImage
+                      src={getAvatarUrl(
+                        participantId,
+                        participantName || undefined
+                      )}
+                      alt={participantName || participantId}
+                    />
+                    <AvatarFallback className="bg-gradient-to-br from-gray-600 to-gray-800">
+                      {getInitials(participantId, participantName || undefined)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <div className="text-sm font-medium">
+                      {participantName || participantId}
+                    </div>
+                    <div className="text-xs text-gray-400 flex items-center">
+                      {speakingStates[participantId] ? (
+                        <>
+                          <span className="w-1.5 h-1.5 bg-green-400 rounded-full mr-1.5 animate-pulse"></span>
+                          Speaking
+                        </>
+                      ) : (
+                        <>
+                          <span className="w-1.5 h-1.5 bg-gray-500 rounded-full mr-1.5"></span>
+                          Silent
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
+                <div className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full">
+                  Connected
+                </div>
               </div>
-              <div className="text-xs text-gray-500">Connected</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
-        {/* Leave button */}
-        <Button
-          className="mt-4 max-w-md w-full fixed bottom-4 left-1/2 -translate-x-1/2 mx-auto bg-red-700 hover:bg-red-800 text-white rounded-[6px]"
-          onClick={() => {
-            disconnect();
-            router.push("/");
-          }}
-        >
-          <LogOut className="h-4 w-4 mr-2" />
-          Leave Room
-        </Button>
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1e1e1e]/70 backdrop-blur-md rounded-full border border-green-900/30 overflow-hidden shadow-xl flex items-center justify-center">
+          <div className="flex items-center p-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "rounded-full h-10 w-10 p-0 mx-1 flex items-center justify-center hover:bg-gray-700/50",
+                speakerMuted &&
+                  "bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300"
+              )}
+              onClick={toggleSpeakerMute}
+            >
+              {speakerMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "rounded-full h-10 w-10 p-0 mx-1 flex items-center justify-center hover:bg-gray-700/50",
+                isMuted
+                  ? "bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300"
+                  : "bg-green-500/20 text-green-400 hover:bg-green-500/30 hover:text-green-300"
+              )}
+              onClick={toggleMute}
+            >
+              {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-full h-10 w-10 p-0 mx-1 flex items-center justify-center hover:bg-red-500/20 text-gray-400 hover:text-red-400"
+              onClick={() => {
+                disconnect();
+                router.push("/");
+              }}
+            >
+              <LogOut size={18} />
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
