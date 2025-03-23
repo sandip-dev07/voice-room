@@ -234,6 +234,8 @@ export default function JoinRoomForm() {
               />
             </div>
 
+            {/* --fi */}
+
             <div className="flex flex-col space-y-4">
               <Button
                 type="submit"
