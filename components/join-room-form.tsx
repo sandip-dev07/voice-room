@@ -5,14 +5,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  AlertCircle,
-  Plus,
-  LogIn,
-  RefreshCw,
-  History,
-  Merge,
-} from "lucide-react";
+import { AlertCircle, Plus, History, Merge } from "lucide-react";
 import {
   getClientLastRoom,
   setClientLastRoom,
@@ -31,9 +24,11 @@ export default function JoinRoomForm() {
     name?: string;
   } | null>(null);
   const router = useRouter();
+  const [isLoadingLastRoom, setIsLoadingLastRoom] = useState(true);
 
   useEffect(() => {
     // Check for last joined room on component mount
+    setIsLoadingLastRoom(true);
     const savedRoom = getClientLastRoom();
     if (savedRoom) {
       // Validate room before showing it
@@ -49,11 +44,15 @@ export default function JoinRoomForm() {
             // If room is invalid, remove it from cookies
             removeClientLastRoom();
           }
+          setIsLoadingLastRoom(false);
         })
         .catch(() => {
           // On error, remove the room from cookies
           removeClientLastRoom();
+          setIsLoadingLastRoom(false);
         });
+    } else {
+      setIsLoadingLastRoom(false);
     }
   }, []);
 
@@ -269,7 +268,18 @@ export default function JoinRoomForm() {
             </div>
           </form>
 
-          {lastRoom && (
+          {isLoadingLastRoom ? (
+            <div className="mt-6 bg-[#252525] rounded-[8px] p-3 border border-gray-800 animate-pulse">
+              <div className="h-4 w-24 bg-gray-700 rounded mb-3"></div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="h-4 w-4 bg-gray-700 rounded"></div>
+                  <div className="h-4 w-32 bg-gray-700 rounded"></div>
+                </div>
+                <div className="h-8 w-16 bg-gray-700 rounded-[8px]"></div>
+              </div>
+            </div>
+          ) : lastRoom ? (
             <div className="mt-6 bg-[#252525] rounded-[8px] p-3 border border-gray-800">
               <p className="text-sm text-gray-400 mb-3">Recent Room</p>
               <div className="flex items-center justify-between">
@@ -291,7 +301,7 @@ export default function JoinRoomForm() {
                 </Button>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
