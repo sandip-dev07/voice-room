@@ -204,7 +204,7 @@ export default function JoinRoomForm() {
           </Button>
         </div>
 
-        <div className="w-full bg-[#1e1e1e]/90 backdrop-blur-md rounded-[8px] p-6 shadow-2xl border border-green-900/30">
+        <div className="w-full bg-[#1e1e1e]/90 backdrop-blur-md rounded-[8px] p-3 shadow-2xl border border-green-900/30">
           <h2 className="text-xl font-bold mb-6 text-center bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">
             Join a Voice Chat Room
           </h2>
@@ -293,18 +293,18 @@ export default function JoinRoomForm() {
                 <div className="flex items-center space-x-3">
                   <History size={15} />
                   <div className="text-sm text-gray-300 font-medium">
-                    <span>Rejoin : </span>
+                    <span>Room ID : </span>
                     {lastRoom.id}
                   </div>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="bg-green-500/20 text-green-400 hover:bg-green-500/30 hover:text-green-300 rounded-lg px-3"
+                  className="bg-green-500/20 text-green-400 hover:bg-green-500/30 hover:text-green-300 rounded-[8px] px-3"
                   onClick={handleContinueLastRoom}
                   disabled={isJoining || isCreating}
                 >
-                  Continue
+                  Rejoin
                 </Button>
               </div>
             </div>
