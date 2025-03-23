@@ -175,9 +175,8 @@ export default function JoinRoomForm() {
   return (
     <div className="flex flex-col h-screen w-full p-0">
       <div className="max-w-md w-[100%] mx-auto flex flex-col justify-center h-full p-0">
-        {/* Header with App Logo */}
-        <div className="flex justify-between items-center mb-8 bg-[#1e1e1e]/80 backdrop-blur-sm rounded-[8px] p-3 shadow-md border border-green-900/20">
-          <div className="flex items-center space-x-3">
+        <div className="w-full bg-[#1e1e1e]/90 backdrop-blur-md rounded-[10px] p-3 shadow-2xl border border-green-900/30">
+          <div className="flex items-center justify-center mb-3">
             <Avatar
               className={cn(
                 "h-7 w-7 rounded-[8px] shadow-md transition-all duration-300 overflow-hidden"
@@ -188,25 +187,9 @@ export default function JoinRoomForm() {
                 M
               </AvatarFallback>
             </Avatar>
-            <div className="text-sm font-medium bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">
-              Voice Chat
-            </div>
           </div>
-
-          {/* Refresh Button */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="rounded-[8px] h-7 w-7 p-0 flex items-center justify-center hover:bg-gray-700/50"
-            onClick={() => window.location.reload()}
-          >
-            <RefreshCw size={14} />
-          </Button>
-        </div>
-
-        <div className="w-full bg-[#1e1e1e]/90 backdrop-blur-md rounded-[8px] p-3 shadow-2xl border border-green-900/30">
           <h2 className="text-xl font-bold mb-6 text-center bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">
-            Join a Voice Chat Room
+            x Meet
           </h2>
 
           {error && (
@@ -287,7 +270,7 @@ export default function JoinRoomForm() {
           </form>
 
           {lastRoom && (
-            <div className="mt-6 bg-[#252525] rounded-[8px] p-4 border border-gray-800">
+            <div className="mt-6 bg-[#252525] rounded-[8px] p-3 border border-gray-800">
               <p className="text-sm text-gray-400 mb-3">Recent Room</p>
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-3">
