@@ -366,6 +366,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
         {/* Header with App Logo */}
         <div className="flex justify-between items-center mb-8 bg-[#1e1e1e]/80 backdrop-blur-sm rounded-xl p-3 shadow-md border border-green-900/20">
           <div className="flex items-center space-x-3">
+            {/* - */}
             <Avatar
               className={cn(
                 "h-7 w-7 rounded-[7px] shadow-md transition-all duration-300 overflow-hidden"
