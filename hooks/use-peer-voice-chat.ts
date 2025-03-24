@@ -10,6 +10,9 @@ type PeerConnection = {
   audio: HTMLAudioElement | null;
   type: "audio";
   connectionQuality: "good" | "fair" | "poor";
+  screenStream?: MediaStream | null;
+  screenVideo?: HTMLVideoElement | null;
+  screenCall?: any;
 };
 
 type RoomParticipant = {
@@ -25,6 +28,9 @@ export function usePeerVoiceChat(roomId: string) {
   const [participants, setParticipants] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [networkQuality, setNetworkQuality] = useState<"good" | "fair" | "poor">("good");
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [activeScreenShare, setActiveScreenShare] = useState<{ userId: string; stream: MediaStream } | null>(null);
 
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -82,9 +88,15 @@ export function usePeerVoiceChat(roomId: string) {
 
     // Handle call stream
     call.on("stream", (remoteStream) => {
-      console.log(`Received audio stream from:`, userId);
+      console.log(`Received stream from:`, userId);
 
-      // Create audio element
+      // Check if this is a screen share stream
+      if (remoteStream.getVideoTracks().length > 0) {
+        setActiveScreenShare({ userId, stream: remoteStream });
+        return;
+      }
+
+      // Handle audio stream as before
       const audio = new Audio();
       audio.srcObject = remoteStream;
       audio.autoplay = true;
@@ -96,11 +108,8 @@ export function usePeerVoiceChat(roomId: string) {
       if (playPromise !== undefined) {
         playPromise.catch((err) => {
           console.error("Error playing audio:", err);
-          // Try again after a short delay
           setTimeout(() => {
-            audio
-              .play()
-              .catch((e) => console.error("Retry error playing audio:", e));
+            audio.play().catch((e) => console.error("Retry error playing audio:", e));
           }, 1000);
         });
       }
@@ -246,7 +255,15 @@ export function usePeerVoiceChat(roomId: string) {
 
     setIsConnected(false);
     setParticipants([]);
-  }, [roomId]);
+
+    // Stop screen sharing if active
+    if (screenStream) {
+      screenStream.getTracks().forEach(track => track.stop());
+      setScreenStream(null);
+      setIsScreenSharing(false);
+      setActiveScreenShare(null);
+    }
+  }, [roomId, screenStream]);
 
   // Register callback for audio elements
   const registerAudioElementsCallback = useCallback(
@@ -376,6 +393,105 @@ export function usePeerVoiceChat(roomId: string) {
     return () => clearInterval(qualityInterval);
   }, []);
 
+  // Function to start screen sharing
+  const startScreenShare = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+
+      setScreenStream(stream);
+      setIsScreenSharing(true);
+      setActiveScreenShare({ userId: userIdRef.current, stream });
+
+      // Store screen share calls to track them
+      const screenCalls: any[] = [];
+
+      // Share screen with all connected peers
+      peersRef.current.forEach((peer, userId) => {
+        if (peerRef.current) {
+          // Create a new call for screen sharing
+          const screenCall = peerRef.current.call(peer.peerId, stream, {
+            metadata: { type: 'screen', userId: userIdRef.current }
+          });
+          screenCalls.push(screenCall);
+
+          // Update peer connection with screen info
+          peersRef.current.set(userId, {
+            ...peer,
+            screenStream: stream,
+            screenCall: screenCall,
+          });
+        }
+      });
+
+      // Handle screen share stop from browser
+      stream.getVideoTracks()[0].onended = () => {
+        stopScreenShare(screenCalls);
+      };
+
+    } catch (err) {
+      console.error("Error starting screen share:", err);
+      setError("Failed to start screen sharing");
+    }
+  }, []);
+
+  // Function to stop screen sharing
+  const stopScreenShare = useCallback((screenCallsOrEvent?: any[] | React.MouseEvent) => {
+    if (screenStream) {
+      // Stop all tracks in the screen stream
+      screenStream.getTracks().forEach(track => track.stop());
+
+      // Close all screen share calls if array is provided
+      if (Array.isArray(screenCallsOrEvent)) {
+        screenCallsOrEvent.forEach(call => {
+          if (call && typeof call.close === 'function') {
+            call.close();
+          }
+        });
+      }
+
+      // Notify all peers that screen sharing has stopped
+      peersRef.current.forEach((peer) => {
+        if (peer.screenStream) {
+          peer.screenStream.getTracks().forEach(track => track.stop());
+        }
+        // Close any existing screen share call
+        if (peer.screenCall && typeof peer.screenCall.close === 'function') {
+          peer.screenCall.close();
+        }
+      });
+
+      // Update peer connections to remove screen info
+      peersRef.current.forEach((peer, userId) => {
+        peersRef.current.set(userId, {
+          ...peer,
+          screenStream: null,
+          screenCall: null,
+        });
+      });
+
+      setScreenStream(null);
+      setIsScreenSharing(false);
+      setActiveScreenShare(null);
+
+      // Notify other peers through data channel if available
+      if (peerRef.current) {
+        peersRef.current.forEach((peer) => {
+          try {
+            const conn = peerRef.current?.connect(peer.peerId);
+            conn?.on('open', () => {
+              conn.send({ type: 'screen-share-stopped', userId: userIdRef.current });
+            });
+          } catch (err) {
+            console.error('Error notifying peer about screen share stop:', err);
+          }
+        });
+      }
+    }
+  }, [screenStream]);
+
   // Initialize PeerJS and WebRTC connections
   useEffect(() => {
     let mounted = true;
@@ -455,15 +571,39 @@ export function usePeerVoiceChat(roomId: string) {
             call.metadata
           );
 
-          // Answer with our audio stream
-          console.log("Answering audio call with local stream");
-          call.answer(localStreamRef.current!);
-
           // Extract the user ID from the peer ID
           let callerId = call.peer.replace(roomPrefixRef.current, "");
 
+          // Check if this is a screen sharing call
+          if (call.metadata?.type === 'screen') {
+            call.answer(); // Answer without sending a stream back
+            
+            call.on("stream", (remoteStream) => {
+              console.log("Received screen share stream from:", callerId);
+              setActiveScreenShare({ 
+                userId: call.metadata.userId || callerId, 
+                stream: remoteStream 
+              });
+            });
+
+            call.on("close", () => {
+              console.log("Screen share call closed from:", callerId);
+              setActiveScreenShare(null);
+            });
+
+            return;
+          }
+
+          // Handle regular audio call
+          call.answer(localStreamRef.current!);
+
           // Handle incoming stream
           call.on("stream", (remoteStream) => {
+            // Skip if this is a video stream (screen share)
+            if (remoteStream.getVideoTracks().length > 0) {
+              return;
+            }
+
             console.log(`Received audio stream from:`, callerId);
 
             // Handle incoming audio
@@ -531,6 +671,17 @@ export function usePeerVoiceChat(roomId: string) {
           call.on("error", (err) => {
             console.error(`Audio call error with`, callerId, ":", err);
             setError(`Call error: ${err.message || "Unknown error"}`);
+          });
+        });
+
+        // Handle data connections for screen share status
+        peer.on('connection', (conn) => {
+          conn.on('data', (data: any) => {
+            if (data.type === 'screen-share-stopped') {
+              if (activeScreenShare?.userId === data.userId) {
+                setActiveScreenShare(null);
+              }
+            }
           });
         });
 
@@ -654,5 +805,9 @@ export function usePeerVoiceChat(roomId: string) {
     isLoading,
     registerAudioElementsCallback,
     networkQuality,
+    isScreenSharing,
+    startScreenShare,
+    stopScreenShare,
+    activeScreenShare,
   };
 }

@@ -12,6 +12,8 @@ import {
   Copy,
   LogOut,
   Check,
+  Monitor,
+  MonitorOff,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "./ui/button";
@@ -32,6 +34,10 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
     disconnect,
     isLoading,
     registerAudioElementsCallback,
+    isScreenSharing,
+    startScreenShare,
+    stopScreenShare,
+    activeScreenShare,
   } = usePeerVoiceChat(roomId);
 
   const [permissionGranted, setPermissionGranted] = useState<boolean | null>(
@@ -52,6 +58,9 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataArrayRef = useRef<Uint8Array | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+
+  // Add screen share video ref
+  const screenShareVideoRef = useRef<HTMLVideoElement>(null);
 
   // Get user's name from localStorage
   useEffect(() => {
@@ -216,6 +225,15 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
     };
   }, [isConnected, isMuted]);
 
+  // Handle screen share video
+  useEffect(() => {
+    if (activeScreenShare && screenShareVideoRef.current) {
+      const video = screenShareVideoRef.current;
+      video.srcObject = activeScreenShare.stream;
+      video.play().catch(console.error);
+    }
+  }, [activeScreenShare]);
+
   const copyRoomLink = () => {
     const url = window.location.href;
     navigator.clipboard.writeText(url).then(() => {
@@ -349,6 +367,38 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
             </div>
           )}
         </div>
+
+        {/* Screen Share View */}
+        {activeScreenShare && (
+          <div className="mb-4 bg-[#1e1e1e]/80 backdrop-blur-sm rounded-xl p-3 shadow-md border border-green-900/20">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center space-x-2">
+                <Monitor size={16} className="text-green-400" />
+                <span className="text-sm font-medium">
+                  {localStorage.getItem(`userName_${roomId}_${activeScreenShare.userId}`) || activeScreenShare.userId} is sharing their screen
+                </span>
+              </div>
+              {activeScreenShare.userId === userId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="rounded-full h-6 w-6 p-0 flex items-center justify-center hover:bg-red-500/20 text-gray-400 hover:text-red-400"
+                  onClick={stopScreenShare}
+                >
+                  <MonitorOff size={14} />
+                </Button>
+              )}
+            </div>
+            <div className="relative aspect-video rounded-lg overflow-hidden bg-black">
+              <video
+                ref={screenShareVideoRef}
+                className="w-full h-full object-contain"
+                playsInline
+                autoPlay
+              />
+            </div>
+          </div>
+        )}
 
         {/* Participants */}
         <div className="mb-4 flex justify-between items-center">
@@ -498,6 +548,17 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
               onClick={toggleMute}
             >
               {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "rounded-full h-10 w-10 p-0 mx-1 flex items-center justify-center hover:bg-gray-700/50",
+                isScreenSharing && "bg-green-500/20 text-green-400 hover:bg-green-500/30 hover:text-green-300"
+              )}
+              onClick={isScreenSharing ? stopScreenShare : startScreenShare}
+            >
+              {isScreenSharing ? <MonitorOff size={18} /> : <Monitor size={18} />}
             </Button>
             <Button
               variant="ghost"
