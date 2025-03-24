@@ -388,6 +388,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
                   <MonitorOff size={14} />
                 </Button>
               )}
+              {/* {} */}
             </div>
             <div className="relative aspect-video rounded-lg overflow-hidden bg-black">
               <video
