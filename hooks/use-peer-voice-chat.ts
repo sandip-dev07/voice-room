@@ -27,10 +27,15 @@ export function usePeerVoiceChat(roomId: string) {
   const [error, setError] = useState<string | null>(null);
   const [participants, setParticipants] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [networkQuality, setNetworkQuality] = useState<"good" | "fair" | "poor">("good");
+  const [networkQuality, setNetworkQuality] = useState<
+    "good" | "fair" | "poor"
+  >("good");
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-  const [activeScreenShare, setActiveScreenShare] = useState<{ userId: string; stream: MediaStream } | null>(null);
+  const [activeScreenShare, setActiveScreenShare] = useState<{
+    userId: string;
+    stream: MediaStream;
+  } | null>(null);
 
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -42,10 +47,14 @@ export function usePeerVoiceChat(roomId: string) {
   >(null);
   const presenceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const participantPollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
+  const maxReconnectAttempts = 3;
 
   // Initialize userId on client side
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       const storedUserId = localStorage.getItem(`voicechat-userid-${roomId}`);
       if (!storedUserId) {
         const newUserId = uuidv4().substring(0, 8);
@@ -59,7 +68,7 @@ export function usePeerVoiceChat(roomId: string) {
 
   // Store user ID in localStorage when it's first created
   useEffect(() => {
-    if (typeof window !== 'undefined' && userIdRef.current) {
+    if (typeof window !== "undefined" && userIdRef.current) {
       localStorage.setItem(`voicechat-userid-${roomId}`, userIdRef.current);
     }
   }, [roomId]);
@@ -109,7 +118,9 @@ export function usePeerVoiceChat(roomId: string) {
         playPromise.catch((err) => {
           console.error("Error playing audio:", err);
           setTimeout(() => {
-            audio.play().catch((e) => console.error("Retry error playing audio:", e));
+            audio
+              .play()
+              .catch((e) => console.error("Retry error playing audio:", e));
           }, 1000);
         });
       }
@@ -175,8 +186,9 @@ export function usePeerVoiceChat(roomId: string) {
       // Update participants list - filter out duplicates and own ID
       const currentParticipants = data.participants
         .filter((p: RoomParticipant) => p.userId !== userIdRef.current) // Remove own ID
-        .filter((p: RoomParticipant, index: number, self: RoomParticipant[]) => 
-          index === self.findIndex((t) => t.userId === p.userId) // Remove duplicates
+        .filter(
+          (p: RoomParticipant, index: number, self: RoomParticipant[]) =>
+            index === self.findIndex((t) => t.userId === p.userId) // Remove duplicates
         )
         .map((p: RoomParticipant) => p.userId);
 
@@ -187,7 +199,11 @@ export function usePeerVoiceChat(roomId: string) {
         const participant = data.participants.find(
           (p: RoomParticipant) => p.userId === participantId
         );
-        if (participant && participant.peerId !== peerRef.current?.id && !peersRef.current.has(participantId)) {
+        if (
+          participant &&
+          participant.peerId !== peerRef.current?.id &&
+          !peersRef.current.has(participantId)
+        ) {
           callPeer(participant.peerId, participantId);
         }
       });
@@ -202,67 +218,77 @@ export function usePeerVoiceChat(roomId: string) {
     fetchParticipants();
 
     // Set up interval for polling
-    participantPollingIntervalRef.current = setInterval(fetchParticipants, 10000);
+    participantPollingIntervalRef.current = setInterval(
+      fetchParticipants,
+      10000
+    );
   }, [fetchParticipants]);
 
   // Cleanup function
   const disconnect = useCallback(() => {
-    // Remove presence from server
-    fetch(`/api/rooms/presence`, {
-      method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        roomId,
-        userId: userIdRef.current,
-      }),
-    }).catch((err) => console.error("Error removing presence:", err));
+    // Cleanup function
+    const cleanup = () => {
+      // Remove presence from server
+      fetch(`/api/rooms/presence`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId, userId: userIdRef.current }),
+      }).catch((err) => console.error("Error removing presence:", err));
 
-    // Clear intervals
-    if (presenceIntervalRef.current) {
-      clearInterval(presenceIntervalRef.current);
-    }
-    if (participantPollingIntervalRef.current) {
-      clearInterval(participantPollingIntervalRef.current);
-    }
+      // Clear intervals
+      if (presenceIntervalRef.current)
+        clearInterval(presenceIntervalRef.current);
+      if (participantPollingIntervalRef.current)
+        clearInterval(participantPollingIntervalRef.current);
 
-    // Close all peer connections
-    peersRef.current.forEach((peer) => {
-      if (peer.audio) {
-        peer.audio.srcObject = null;
+      // Close all peer connections
+      peersRef.current.forEach((peer) => {
+        if (peer.audio) {
+          peer.audio.srcObject = null;
+          peer.audio.pause();
+          peer.audio = null;
+        }
+        if (peer.call) peer.call.close();
+      });
+      peersRef.current.clear();
+
+      // Close peer connection
+      if (peerRef.current) {
+        peerRef.current.destroy();
+        peerRef.current = null;
       }
-      if (peer.call) {
-        peer.call.close();
+
+      // Stop local stream
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => track.stop());
+        localStreamRef.current = null;
       }
-    });
-    peersRef.current.clear();
 
-    // Close peer connection
-    if (peerRef.current) {
-      peerRef.current.destroy();
-      peerRef.current = null;
-    }
+      // Close audio context
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
 
-    // Stop local stream
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = null;
-    }
+      // Remove user ID from localStorage
+      localStorage.removeItem(`voicechat-userid-${roomId}`);
 
-    // Remove user ID from localStorage when explicitly disconnecting
-    localStorage.removeItem(`voicechat-userid-${roomId}`);
+      // Reset states
+      setIsConnected(false);
+      setParticipants([]);
+      setError(null);
+      setIsLoading(false);
 
-    setIsConnected(false);
-    setParticipants([]);
+      // Stop screen sharing if active
+      if (screenStream) {
+        screenStream.getTracks().forEach((track) => track.stop());
+        setScreenStream(null);
+        setIsScreenSharing(false);
+        setActiveScreenShare(null);
+      }
+    };
 
-    // Stop screen sharing if active
-    if (screenStream) {
-      screenStream.getTracks().forEach(track => track.stop());
-      setScreenStream(null);
-      setIsScreenSharing(false);
-      setActiveScreenShare(null);
-    }
+    cleanup();
   }, [roomId, screenStream]);
 
   // Register callback for audio elements
@@ -321,7 +347,10 @@ export function usePeerVoiceChat(roomId: string) {
           if (conn.open) {
             const stats = conn.getStats();
             stats.forEach((stat: any) => {
-              if (stat.type === 'candidate-pair' && stat.state === 'succeeded') {
+              if (
+                stat.type === "candidate-pair" &&
+                stat.state === "succeeded"
+              ) {
                 // Calculate quality based on RTT and packet loss
                 const rtt = stat.currentRoundTripTime || 0;
                 const packetLoss = stat.packetsLost || 0;
@@ -344,45 +373,33 @@ export function usePeerVoiceChat(roomId: string) {
 
       if (connectionCount > 0) {
         const averageQuality = totalQuality / connectionCount;
-        const newQuality = averageQuality > 0.7 ? "good" : averageQuality > 0.4 ? "fair" : "poor";
+        const newQuality =
+          averageQuality > 0.7
+            ? "good"
+            : averageQuality > 0.4
+            ? "fair"
+            : "poor";
         setNetworkQuality(newQuality);
-        
+
         // Adjust audio quality based on network conditions
         if (localStreamRef.current) {
           const audioTrack = localStreamRef.current.getAudioTracks()[0];
           if (audioTrack) {
             const constraints = audioTrack.getConstraints();
-            if (newQuality === "poor") {
-              // Reduce quality for poor connections
-              audioTrack.applyConstraints({
-                ...constraints,
-                sampleRate: 22050,
-                channelCount: 1,
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: false
-              });
-            } else if (newQuality === "fair") {
-              // Medium quality for fair connections
-              audioTrack.applyConstraints({
-                ...constraints,
-                sampleRate: 32000,
-                channelCount: 1,
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-              });
-            } else {
-              // High quality for good connections
-              audioTrack.applyConstraints({
-                ...constraints,
-                sampleRate: 48000,
-                channelCount: 1,
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-              });
-            }
+            const newConstraints = {
+              ...constraints,
+              sampleRate:
+                newQuality === "poor"
+                  ? 22050
+                  : newQuality === "fair"
+                  ? 32000
+                  : 48000,
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: newQuality !== "poor",
+            };
+            audioTrack.applyConstraints(newConstraints).catch(console.error);
           }
         }
       }
@@ -413,7 +430,7 @@ export function usePeerVoiceChat(roomId: string) {
         if (peerRef.current) {
           // Create a new call for screen sharing
           const screenCall = peerRef.current.call(peer.peerId, stream, {
-            metadata: { type: 'screen', userId: userIdRef.current }
+            metadata: { type: "screen", userId: userIdRef.current },
           });
           screenCalls.push(screenCall);
 
@@ -430,7 +447,6 @@ export function usePeerVoiceChat(roomId: string) {
       stream.getVideoTracks()[0].onended = () => {
         stopScreenShare(screenCalls);
       };
-
     } catch (err) {
       console.error("Error starting screen share:", err);
       setError("Failed to start screen sharing");
@@ -438,101 +454,262 @@ export function usePeerVoiceChat(roomId: string) {
   }, []);
 
   // Function to stop screen sharing
-  const stopScreenShare = useCallback((screenCallsOrEvent?: any[] | React.MouseEvent) => {
-    if (screenStream) {
-      // Stop all tracks in the screen stream
-      screenStream.getTracks().forEach(track => track.stop());
+  const stopScreenShare = useCallback(
+    (screenCallsOrEvent?: any[] | React.MouseEvent) => {
+      if (screenStream) {
+        // Stop all tracks in the screen stream
+        screenStream.getTracks().forEach((track) => track.stop());
 
-      // Close all screen share calls if array is provided
-      if (Array.isArray(screenCallsOrEvent)) {
-        screenCallsOrEvent.forEach(call => {
-          if (call && typeof call.close === 'function') {
-            call.close();
-          }
-        });
-      }
-
-      // Notify all peers that screen sharing has stopped
-      peersRef.current.forEach((peer) => {
-        if (peer.screenStream) {
-          peer.screenStream.getTracks().forEach(track => track.stop());
+        // Close all screen share calls if array is provided
+        if (Array.isArray(screenCallsOrEvent)) {
+          screenCallsOrEvent.forEach((call) => {
+            if (call && typeof call.close === "function") {
+              call.close();
+            }
+          });
         }
-        // Close any existing screen share call
-        if (peer.screenCall && typeof peer.screenCall.close === 'function') {
-          peer.screenCall.close();
-        }
-      });
 
-      // Update peer connections to remove screen info
-      peersRef.current.forEach((peer, userId) => {
-        peersRef.current.set(userId, {
-          ...peer,
-          screenStream: null,
-          screenCall: null,
-        });
-      });
-
-      setScreenStream(null);
-      setIsScreenSharing(false);
-      setActiveScreenShare(null);
-
-      // Notify other peers through data channel if available
-      if (peerRef.current) {
+        // Notify all peers that screen sharing has stopped
         peersRef.current.forEach((peer) => {
-          try {
-            const conn = peerRef.current?.connect(peer.peerId);
-            conn?.on('open', () => {
-              conn.send({ type: 'screen-share-stopped', userId: userIdRef.current });
-            });
-          } catch (err) {
-            console.error('Error notifying peer about screen share stop:', err);
+          if (peer.screenStream) {
+            peer.screenStream.getTracks().forEach((track) => track.stop());
+          }
+          // Close any existing screen share call
+          if (peer.screenCall && typeof peer.screenCall.close === "function") {
+            peer.screenCall.close();
           }
         });
-      }
-    }
-  }, [screenStream]);
 
-  // Initialize PeerJS and WebRTC connections
+        // Update peer connections to remove screen info
+        peersRef.current.forEach((peer, userId) => {
+          peersRef.current.set(userId, {
+            ...peer,
+            screenStream: null,
+            screenCall: null,
+          });
+        });
+
+        setScreenStream(null);
+        setIsScreenSharing(false);
+        setActiveScreenShare(null);
+
+        // Notify other peers through data channel if available
+        if (peerRef.current) {
+          peersRef.current.forEach((peer) => {
+            try {
+              const conn = peerRef.current?.connect(peer.peerId);
+              conn?.on("open", () => {
+                conn.send({
+                  type: "screen-share-stopped",
+                  userId: userIdRef.current,
+                });
+              });
+            } catch (err) {
+              console.error(
+                "Error notifying peer about screen share stop:",
+                err
+              );
+            }
+          });
+        }
+      }
+    },
+    [screenStream]
+  );
+
+  // Handle audio stream creation and setup
+  const handleAudioStream = useCallback(
+    (remoteStream: MediaStream, callerId: string) => {
+      const audio = new Audio();
+      audio.srcObject = remoteStream;
+      audio.autoplay = true;
+      audio.setAttribute("playsinline", "true");
+      audio.muted = false;
+      audio.volume = 1.0;
+
+      const handlePlayError = async (error: any) => {
+        console.error("Error playing audio:", error);
+        try {
+          if (
+            !audioContextRef.current ||
+            audioContextRef.current.state === "closed"
+          ) {
+            audioContextRef.current = new (window.AudioContext ||
+              (window as any).webkitAudioContext)();
+          }
+          if (audioContextRef.current.state === "suspended") {
+            await audioContextRef.current.resume();
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await audio.play();
+        } catch (e) {
+          console.error("Retry error playing audio:", e);
+        }
+      };
+
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(handlePlayError);
+      }
+
+      return audio;
+    },
+    []
+  );
+
+  // Handle screen share calls
+  const handleScreenShare = useCallback((call: any, callerId: string) => {
+    call.answer();
+
+    call.on("stream", (remoteStream: MediaStream) => {
+      console.log("Received screen share stream from:", callerId);
+      setActiveScreenShare({
+        userId: call.metadata.userId || callerId,
+        stream: remoteStream,
+      });
+    });
+
+    call.on("close", () => {
+      console.log("Screen share call closed from:", callerId);
+      setActiveScreenShare(null);
+    });
+  }, []);
+
+  // Handle audio calls
+  const handleAudioCall = useCallback(
+    (call: any, callerId: string) => {
+      call.answer(localStreamRef.current!);
+
+      call.on("stream", (remoteStream: MediaStream) => {
+        if (remoteStream.getVideoTracks().length > 0) return;
+
+        console.log(`Received audio stream from:`, callerId);
+        const audio = handleAudioStream(remoteStream, callerId);
+
+        peersRef.current.set(callerId, {
+          peerId: call.peer,
+          call,
+          audio,
+          type: "audio",
+          connectionQuality: "good",
+        });
+
+        setParticipants((prev) => {
+          if (!prev.includes(callerId)) {
+            return [...prev, callerId];
+          }
+          return prev;
+        });
+
+        if (audioElementsCallbackRef.current) {
+          audioElementsCallbackRef.current(callerId, audio);
+        }
+
+        // Monitor audio quality
+        const audioContext = new (window.AudioContext ||
+          (window as any).webkitAudioContext)();
+        const analyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(remoteStream);
+
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        let silenceCount = 0;
+
+        const checkAudioQuality = () => {
+          analyser.getByteFrequencyData(dataArray);
+          const average =
+            dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+
+          if (average < 5) {
+            silenceCount++;
+            if (silenceCount > 10) {
+              const peer = peersRef.current.get(callerId);
+              if (peer) {
+                peer.connectionQuality = "poor";
+                if (peer.call) {
+                  peer.call.peerConnection.restartIce();
+                }
+              }
+            }
+          } else {
+            silenceCount = 0;
+            const peer = peersRef.current.get(callerId);
+            if (peer) {
+              peer.connectionQuality = "good";
+            }
+          }
+
+          requestAnimationFrame(checkAudioQuality);
+        };
+
+        checkAudioQuality();
+      });
+
+      call.on("close", () => {
+        console.log(`Audio call closed with:`, callerId);
+        const peer = peersRef.current.get(callerId);
+        if (peer) {
+          if (peer.audio) {
+            peer.audio.srcObject = null;
+            peer.audio.pause();
+            peer.audio = null;
+          }
+          if (peer.call) peer.call.close();
+          peersRef.current.delete(callerId);
+        }
+        setParticipants((prev) => prev.filter((id) => id !== callerId));
+      });
+
+      call.on("error", (err: Error) => {
+        console.error(`Audio call error with`, callerId, ":", err);
+        setError(`Call error: ${err.message || "Unknown error"}`);
+        if (call.peerConnection.connectionState === "failed") {
+          call.peerConnection.restartIce();
+        }
+      });
+    },
+    [handleAudioStream]
+  );
+
+  // Initialize voice chat with optimized setup
   useEffect(() => {
     let mounted = true;
 
     const initializeVoiceChat = async () => {
       try {
         setIsLoading(true);
+        reconnectAttemptsRef.current = 0;
 
-        // Get local audio stream with initial low quality settings for better initial connection
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
-            sampleRate: 22050, // Start with lower quality
+            sampleRate: 48000,
             channelCount: 1,
           },
           video: false,
         });
 
         if (!mounted) return;
-        
-        // Set initial mute state
-        stream.getAudioTracks().forEach(track => {
+
+        stream.getAudioTracks().forEach((track) => {
           track.enabled = !isMuted;
         });
-        
-        localStreamRef.current = stream;
 
-        // Create a unique peer ID for this user in this room
+        localStreamRef.current = stream;
         const peerId = `${roomPrefixRef.current}${userIdRef.current}`;
 
-        // Initialize PeerJS
         const peer = new Peer(peerId, {
-          debug: 3, // Increase debug level for more verbose logging
+          debug: 3,
           config: {
             iceServers: [
               { urls: "stun:stun.l.google.com:19302" },
               { urls: "stun:stun1.google.com:19302" },
               { urls: "stun:stun2.google.com:19302" },
-              // Add TURN servers for better NAT traversal
               {
                 urls: "turn:global.turn.twilio.com:3478?transport=udp",
                 username:
@@ -541,167 +718,55 @@ export function usePeerVoiceChat(roomId: string) {
               },
             ],
             sdpSemantics: "unified-plan",
+            iceTransportPolicy: "all",
+            bundlePolicy: "balanced",
+            rtcpMuxPolicy: "require",
           },
         });
 
         peerRef.current = peer;
 
-        // Handle peer open event
+        // Handle peer events
         peer.on("open", async (id) => {
+          if (!mounted) return;
           console.log("Connected to PeerJS server with ID:", id);
           setIsConnected(true);
           setIsLoading(false);
-
-          // Announce presence to other peers via server
+          reconnectAttemptsRef.current = 0;
           await broadcastPresence();
-
-          // Start polling for participants
           startParticipantPolling();
-
-          // Start network quality monitoring
           const cleanupQualityMonitor = monitorNetworkQuality();
+          cleanupRef.current = cleanupQualityMonitor || null;
         });
 
         // Handle incoming calls
         peer.on("call", (call) => {
-          console.log(
-            "Received call from:",
-            call.peer,
-            "with metadata:",
-            call.metadata
-          );
+          const callerId = call.peer.replace(roomPrefixRef.current, "");
 
-          // Extract the user ID from the peer ID
-          let callerId = call.peer.replace(roomPrefixRef.current, "");
-
-          // Check if this is a screen sharing call
-          if (call.metadata?.type === 'screen') {
-            call.answer(); // Answer without sending a stream back
-            
-            call.on("stream", (remoteStream) => {
-              console.log("Received screen share stream from:", callerId);
-              setActiveScreenShare({ 
-                userId: call.metadata.userId || callerId, 
-                stream: remoteStream 
-              });
-            });
-
-            call.on("close", () => {
-              console.log("Screen share call closed from:", callerId);
-              setActiveScreenShare(null);
-            });
-
+          if (call.metadata?.type === "screen") {
+            handleScreenShare(call, callerId);
             return;
           }
 
-          // Handle regular audio call
-          call.answer(localStreamRef.current!);
-
-          // Handle incoming stream
-          call.on("stream", (remoteStream) => {
-            // Skip if this is a video stream (screen share)
-            if (remoteStream.getVideoTracks().length > 0) {
-              return;
-            }
-
-            console.log(`Received audio stream from:`, callerId);
-
-            // Handle incoming audio
-            const audio = new Audio();
-            audio.srcObject = remoteStream;
-            audio.autoplay = true;
-            audio.setAttribute("playsinline", "true");
-            audio.muted = false;
-
-            // Try to play immediately
-            const playPromise = audio.play();
-            if (playPromise !== undefined) {
-              playPromise.catch((err) => {
-                console.error("Error playing audio:", err);
-                // Try again after a short delay
-                setTimeout(() => {
-                  audio
-                    .play()
-                    .catch((e) =>
-                      console.error("Retry error playing audio:", e)
-                    );
-                }, 1000);
-              });
-            }
-
-            // Store the peer connection
-            peersRef.current.set(callerId, {
-              peerId: call.peer,
-              call,
-              audio,
-              type: "audio",
-              connectionQuality: "good",
-            });
-
-            // Add to participants
-            setParticipants((prev) => {
-              if (!prev.includes(callerId)) {
-                return [...prev, callerId];
-              }
-              return prev;
-            });
-
-            // Register audio element for volume control
-            if (audioElementsCallbackRef.current) {
-              audioElementsCallbackRef.current(callerId, audio);
-            }
-          });
-
-          // Handle call close
-          call.on("close", () => {
-            console.log(`Audio call closed with:`, callerId);
-
-            // Clean up audio
-            const peer = peersRef.current.get(callerId);
-            if (peer && peer.audio) {
-              peer.audio.srcObject = null;
-            }
-            peersRef.current.delete(callerId);
-
-            // Remove from participants
-            setParticipants((prev) => prev.filter((id) => id !== callerId));
-          });
-
-          // Handle call errors
-          call.on("error", (err) => {
-            console.error(`Audio call error with`, callerId, ":", err);
-            setError(`Call error: ${err.message || "Unknown error"}`);
-          });
+          handleAudioCall(call, callerId);
         });
 
-        // Handle data connections for screen share status
-        peer.on('connection', (conn) => {
-          conn.on('data', (data: any) => {
-            if (data.type === 'screen-share-stopped') {
-              if (activeScreenShare?.userId === data.userId) {
-                setActiveScreenShare(null);
-              }
-            }
-          });
-        });
-
-        // Handle peer errors
+        // Handle peer errors and disconnection
         peer.on("error", (err) => {
           console.error("Peer error:", err);
           setError(`Connection error: ${err.message || "Unknown error"}`);
           setIsLoading(false);
         });
 
-        // Handle peer disconnection
         peer.on("disconnected", () => {
           console.log("Disconnected from PeerJS server");
           setIsConnected(false);
-
-          // Try to reconnect
-          peer.reconnect();
+          if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+            peer.reconnect();
+            reconnectAttemptsRef.current++;
+          }
         });
 
-        // Handle peer close
         peer.on("close", () => {
           console.log("PeerJS connection closed");
           setIsConnected(false);
@@ -717,80 +782,31 @@ export function usePeerVoiceChat(roomId: string) {
       }
     };
 
-    // Start the voice chat
     initializeVoiceChat();
 
-    // Periodically broadcast presence to server
-    presenceIntervalRef.current = setInterval(broadcastPresence, 60000);
-
+    // Cleanup function
     return () => {
       mounted = false;
-
-      // Clean up
-      if (presenceIntervalRef.current) {
-        clearInterval(presenceIntervalRef.current);
-      }
-
-      if (participantPollingIntervalRef.current) {
-        clearInterval(participantPollingIntervalRef.current);
-      }
-
-      // Remove presence from server
-      fetch(`/api/rooms/presence`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          roomId,
-          userId: userIdRef.current,
-        }),
-      }).catch((err) => console.error("Error removing presence:", err));
-
-      // Close PeerJS connection
-      if (peerRef.current) {
-        peerRef.current.destroy();
-      }
-
-      // Stop local stream
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => track.stop());
-      }
-
-      // Close all peer connections
-      peersRef.current.forEach((peer) => {
-        if (peer.call) {
-          peer.call.close();
-        }
-        if (peer.audio) {
-          peer.audio.srcObject = null;
-        }
-      });
-
-      peersRef.current.clear();
-
-      // Stop network quality monitoring
-      const cleanupQualityMonitor = monitorNetworkQuality();
+      if (cleanupRef.current) cleanupRef.current();
+      disconnect();
     };
-  }, [roomId, broadcastPresence, startParticipantPolling, monitorNetworkQuality]);
+  }, [
+    roomId,
+    broadcastPresence,
+    startParticipantPolling,
+    monitorNetworkQuality,
+    disconnect,
+    handleScreenShare,
+    handleAudioCall,
+  ]);
 
-  // Handle mute/unmute
+  // Handle mute/unmute with optimized state updates
   useEffect(() => {
     if (localStreamRef.current) {
       const tracks = localStreamRef.current.getAudioTracks();
       tracks.forEach((track) => {
-        const wasEnabled = track.enabled;
         track.enabled = !isMuted;
-        console.log(
-          `Audio track ${track.id} changed from ${wasEnabled} to ${!isMuted}`
-        );
       });
-
-      if (tracks.length === 0) {
-        console.warn("No audio tracks found in local stream");
-      }
-    } else {
-      console.warn("Local stream not available for mute/unmute");
     }
   }, [isMuted]);
 

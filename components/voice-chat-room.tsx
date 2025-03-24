@@ -80,7 +80,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
       .catch(() => setPermissionGranted(false));
   }, []);
 
-  // Handle speaker mute/unmute
+  // Handle speaker mute/unmute with improved audio handling
   useEffect(() => {
     const audioElements = Array.from(audioElementsRef.current.values());
 
@@ -92,14 +92,27 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
         if (!speakerMuted) {
           const playPromise = audio.play();
           if (playPromise !== undefined) {
-            playPromise.catch((e) => console.error("Audio play error:", e));
+            playPromise.catch(async (error) => {
+              console.error("Audio play error:", error);
+              try {
+                // Try to resume audio context if it was suspended
+                if (audioContextRef.current?.state === "suspended") {
+                  await audioContextRef.current.resume();
+                }
+                // Retry playing after a short delay
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                await audio.play();
+              } catch (e) {
+                console.error("Retry error playing audio:", e);
+              }
+            });
           }
         }
       }
     });
   }, [speakerMuted, volume]);
 
-  // Register callback for audio elements
+  // Register callback for audio elements with improved handling
   useEffect(() => {
     if (isConnected) {
       const handleAudioElement = (id: string, audio: HTMLAudioElement) => {
@@ -107,7 +120,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
         audio.muted = speakerMuted;
         audio.volume = volume;
 
-        // Set up speaking detection for other participants
+        // Set up speaking detection for other participants with improved audio analysis
         if (id !== userId) {
           const audioContext = new (window.AudioContext ||
             (window as any).webkitAudioContext)();
@@ -118,19 +131,36 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
           analyser.fftSize = 256;
           analyser.smoothingTimeConstant = 0.8;
+          analyser.minDecibels = -90;
+          analyser.maxDecibels = -10;
           source.connect(analyser);
 
           const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          let silenceCount = 0;
 
           const checkAudioLevel = () => {
             analyser.getByteFrequencyData(dataArray);
             const average =
               dataArray.reduce((sum, value) => sum + value, 0) /
               dataArray.length;
-            setSpeakingStates((prev) => ({
-              ...prev,
-              [id]: average > 20,
-            }));
+
+            // More sophisticated speaking detection
+            if (average > 20) {
+              silenceCount = 0;
+              setSpeakingStates((prev) => ({
+                ...prev,
+                [id]: true,
+              }));
+            } else {
+              silenceCount++;
+              if (silenceCount > 5) {
+                setSpeakingStates((prev) => ({
+                  ...prev,
+                  [id]: false,
+                }));
+              }
+            }
+
             requestAnimationFrame(checkAudioLevel);
           };
 
@@ -140,7 +170,20 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
         if (!speakerMuted) {
           const playPromise = audio.play();
           if (playPromise !== undefined) {
-            playPromise.catch((e) => console.error("Audio play error:", e));
+            playPromise.catch(async (error) => {
+              console.error("Audio play error:", error);
+              try {
+                // Try to resume audio context if it was suspended
+                if (audioContextRef.current?.state === "suspended") {
+                  await audioContextRef.current.resume();
+                }
+                // Retry playing after a short delay
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                await audio.play();
+              } catch (e) {
+                console.error("Retry error playing audio:", e);
+              }
+            });
           }
         }
       };
@@ -155,7 +198,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
     userId,
   ]);
 
-  // Set up audio visualization for current user
+  // Set up audio visualization for current user with improved analysis
   useEffect(() => {
     if (!isConnected || isMuted) {
       setIsSpeaking(false);
@@ -169,10 +212,16 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
     const setupAudioVisualization = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+            channelCount: 1,
+          },
         });
 
-        // Create audio context
+        // Create audio context with improved settings
         const audioContext = new (window.AudioContext ||
           (window as any).webkitAudioContext)();
         const analyser = audioContext.createAnalyser();
@@ -180,27 +229,38 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
 
         analyser.fftSize = 256;
         analyser.smoothingTimeConstant = 0.8;
+        analyser.minDecibels = -90;
+        analyser.maxDecibels = -10;
         source.connect(analyser);
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        let silenceCount = 0;
 
         audioContextRef.current = audioContext;
         analyserRef.current = analyser;
         dataArrayRef.current = dataArray;
 
-        // Start visualization loop
+        // Start visualization loop with improved analysis
         const checkAudioLevel = () => {
           if (!analyserRef.current || !dataArrayRef.current) return;
 
           analyserRef.current.getByteFrequencyData(dataArrayRef.current);
 
-          // Calculate average volume
+          // Calculate average volume with improved threshold
           const average =
             dataArrayRef.current.reduce((sum, value) => sum + value, 0) /
             dataArrayRef.current.length;
 
-          // Set speaking state based on threshold
-          setIsSpeaking(average > 20);
+          // More sophisticated speaking detection
+          if (average > 20) {
+            silenceCount = 0;
+            setIsSpeaking(true);
+          } else {
+            silenceCount++;
+            if (silenceCount > 5) {
+              setIsSpeaking(false);
+            }
+          }
 
           // Continue loop
           animationFrameRef.current = requestAnimationFrame(checkAudioLevel);
@@ -375,7 +435,10 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
               <div className="flex items-center space-x-2">
                 <Monitor size={16} className="text-green-400" />
                 <span className="text-sm font-medium">
-                  {localStorage.getItem(`userName_${roomId}_${activeScreenShare.userId}`) || activeScreenShare.userId} is sharing their screen
+                  {localStorage.getItem(
+                    `userName_${roomId}_${activeScreenShare.userId}`
+                  ) || activeScreenShare.userId}{" "}
+                  is sharing their screen
                 </span>
               </div>
               {activeScreenShare.userId === userId && (
@@ -555,11 +618,16 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
               size="sm"
               className={cn(
                 "rounded-full h-10 w-10 p-0 mx-1 flex items-center justify-center hover:bg-gray-700/50",
-                isScreenSharing && "bg-green-500/20 text-green-400 hover:bg-green-500/30 hover:text-green-300"
+                isScreenSharing &&
+                  "bg-green-500/20 text-green-400 hover:bg-green-500/30 hover:text-green-300"
               )}
               onClick={isScreenSharing ? stopScreenShare : startScreenShare}
             >
-              {isScreenSharing ? <MonitorOff size={18} /> : <Monitor size={18} />}
+              {isScreenSharing ? (
+                <MonitorOff size={18} />
+              ) : (
+                <Monitor size={18} />
+              )}
             </Button>
             <Button
               variant="ghost"
