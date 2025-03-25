@@ -707,21 +707,43 @@ export function usePeerVoiceChat(roomId: string) {
           debug: 3,
           config: {
             iceServers: [
+              // Google's public STUN servers
               { urls: "stun:stun.l.google.com:19302" },
-              { urls: "stun:stun1.google.com:19302" },
-              { urls: "stun:stun2.google.com:19302" },
+              { urls: "stun:stun1.l.google.com:19302" },
+              { urls: "stun:stun2.l.google.com:19302" },
+              { urls: "stun:stun3.l.google.com:19302" },
+              // OpenRelay STUN servers
+              { urls: "stun:openrelay.metered.ca:80" },
+              { urls: "stun:openrelay.metered.ca:80?transport=tcp" },
+              { urls: "stun:openrelay.metered.ca:443" },
+              { urls: "stun:openrelay.metered.ca:443?transport=tcp" },
+              // Twilio TURN servers
               {
                 urls: "turn:global.turn.twilio.com:3478?transport=udp",
-                username:
-                  "f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d",
+                username: "f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d",
                 credential: "w1WpauEsFbEK+oFkxC/mEZ48bQlPwjnl1xoQgkA0vTw=",
               },
+              {
+                urls: "turn:global.turn.twilio.com:3478?transport=tcp",
+                username: "f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d",
+                credential: "w1WpauEsFbEK+oFkxC/mEZ48bQlPwjnl1xoQgkA0vTw=",
+              },
+              {
+                urls: "turn:global.turn.twilio.com:443?transport=tcp",
+                username: "f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d",
+                credential: "w1WpauEsFbEK+oFkxC/mEZ48bQlPwjnl1xoQgkA0vTw=",
+              }
             ],
             sdpSemantics: "unified-plan",
             iceTransportPolicy: "all",
-            bundlePolicy: "balanced",
+            bundlePolicy: "max-bundle",
             rtcpMuxPolicy: "require",
+            iceCandidatePoolSize: 10
           },
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          path: "/"
         });
 
         peerRef.current = peer;
