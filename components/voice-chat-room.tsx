@@ -614,7 +614,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
             >
               {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
             </Button>
-            <Button
+            {/*  <Button
               variant="ghost"
               size="sm"
               className={cn(
@@ -629,7 +629,7 @@ export default function VoiceChatRoom({ roomId }: VoiceChatRoomProps) {
               ) : (
                 <Monitor size={18} />
               )}
-            </Button>
+            </Button>*/}
             <Button
               variant="ghost"
               size="sm"
